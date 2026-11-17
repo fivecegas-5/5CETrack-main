@@ -17,6 +17,6 @@
         data-email="@yield('auth-email', old('email', ''))"
     ></div>
     @viteReactRefresh
-    @vite(['resources/css/app.css', 'resources/js/app.js'])
+    @vite(['resources/js/app.js'])
 </body>
 </html>

@@ -58,6 +58,7 @@ const pageTitles = {
     credit: 'Fuel credit',
     setup: 'Station setup',
     users: 'Team management',
+    settings: 'Settings',
 };
 
 const navigation = [
@@ -70,8 +71,9 @@ const navigation = [
     { label: 'Fuel prices', href: '/fuel-prices', icon: '₱', page: 'prices' },
     { label: 'Fuel credit', href: '/credit', icon: '◷', page: 'credit' },
     { label: 'Stock adjustments', href: '/adjustments', icon: '↔', page: 'adjustments' },
-    { label: 'Station setup', href: '/setup', icon: '⚙', page: 'setup' },
+    { label: 'Station setup', href: '/setup', icon: '⛽', page: 'setup' },
     { label: 'Team management', href: '/users', icon: '♙', page: 'users' },
+    { label: 'Settings', href: '/settings', icon: '⚙', page: 'settings' },
 ];
 
 function Button({ children, className = '', type = 'button', ...props }) {
@@ -683,7 +685,7 @@ function AuthPage({ root, page }) {
     const action = isReset ? '/reset-password' : isForgot ? '/forgot-password' : '/login';
     const submitLabel = isReset ? 'Reset password' : isForgot ? 'Send reset link' : 'Sign in';
     return (
-        <main className="grid min-h-screen bg-white lg:grid-cols-2">
+        <main className="grid min-h-screen bg-[#edeefa] lg:grid-cols-2">
             <aside className="relative hidden min-h-screen overflow-hidden bg-slate-900 lg:block">
                 <img className="absolute inset-0 size-full object-cover opacity-70" src="/images/fiveCEgasStation.jpg" alt="Five CE Gas Station" />
                 <div className="absolute inset-0 bg-gradient-to-br from-slate-950/85 via-blue-950/50 to-rose-950/70" />
@@ -748,6 +750,10 @@ function AuthPage({ root, page }) {
 
 function App({ root }) {
     const [mobileNavOpen, setMobileNavOpen] = useState(false);
+    const [theme, setTheme] = useState(() => {
+        const savedTheme = window.localStorage.getItem('fivece-theme');
+        return ['dark', 'comic'].includes(savedTheme) ? savedTheme : 'light';
+    });
     const [notice, setNotice] = useState('');
     const [workspace, setWorkspace] = useState(null);
     const [workspaceError, setWorkspaceError] = useState('');
@@ -807,6 +813,32 @@ function App({ root }) {
         };
     }, [notificationsOpen]);
 
+    useEffect(() => {
+        window.localStorage.setItem('fivece-theme', theme);
+    }, [theme]);
+
+    useEffect(() => {
+        if (!mobileNavOpen) return undefined;
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+
+        function closeOnEscape(event) {
+            if (event.key === 'Escape') setMobileNavOpen(false);
+        }
+
+        function closeOnDesktop() {
+            if (window.matchMedia('(min-width: 1024px)').matches) setMobileNavOpen(false);
+        }
+
+        document.addEventListener('keydown', closeOnEscape);
+        window.addEventListener('resize', closeOnDesktop);
+        return () => {
+            document.body.style.overflow = previousOverflow;
+            document.removeEventListener('keydown', closeOnEscape);
+            window.removeEventListener('resize', closeOnDesktop);
+        };
+    }, [mobileNavOpen]);
+
     async function markNotificationRead(notification) {
         if (notification.read_at) return;
         setNotificationActionBusy(true);
@@ -843,6 +875,7 @@ function App({ root }) {
     }
 
     useEffect(() => {
+        if (page === 'settings') return undefined;
         let cancelled = false;
         const workspaceUrl = new URL(root.dataset.workspaceUrl, window.location.origin);
         const pageUrl = new URL(window.location.href);
@@ -862,7 +895,7 @@ function App({ root }) {
         return () => {
             cancelled = true;
         };
-    }, [root]);
+    }, [page, root]);
 
     function submitDemo(event) {
         event.preventDefault();
@@ -888,17 +921,21 @@ function App({ root }) {
             status={root.dataset.status}
         />,
         users: workspace && <WorkspacePage data={workspace} page="users" root={root} userName={userName} />,
+        settings: <WorkspacePage page="settings" root={root} theme={theme} onThemeChange={setTheme} />,
     };
-    const visibleNavigation = navigation.filter((item) => isOwner || ['sales', 'transactions'].includes(item.page));
+    const visibleNavigation = navigation.filter((item) => isOwner || ['sales', 'transactions', 'settings'].includes(item.page));
 
     return (
-        <div className="min-h-screen bg-[#f5f6fa] text-slate-800">
+        <div className="min-h-screen bg-[#edeefa] text-slate-800">
             {mobileNavOpen && <button aria-label="Close navigation" className="fixed inset-0 z-30 bg-slate-950/50 lg:hidden" onClick={() => setMobileNavOpen(false)} type="button" />}
-            <aside className={`fixed inset-y-0 left-0 z-40 flex w-[260px] flex-col overflow-y-auto bg-[linear-gradient(180deg,#111d2e_0%,#192333_34%,#402b3c_66%,#9b343e_100%)] text-white shadow-xl transition-transform lg:translate-x-0 ${mobileNavOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-                <a className="flex h-[84px] items-center gap-2.5 border-b border-white/10 px-5" href="/">
-                    <img className="size-11 shrink-0 object-contain" src="/images/fiveCElogo.png" alt="" />
-                    <strong className="text-sm font-black tracking-[0.08em]">FIVE C E GAS</strong>
-                </a>
+            <aside aria-label="Sidebar" aria-modal={mobileNavOpen ? 'true' : undefined} className={`fixed inset-y-0 left-0 z-40 flex w-[min(260px,85vw)] flex-col overflow-y-auto bg-[linear-gradient(180deg,#111d2e_0%,#192333_34%,#402b3c_66%,#9b343e_100%)] text-white shadow-xl transition-transform lg:w-[260px] lg:translate-x-0 ${mobileNavOpen ? 'translate-x-0' : '-translate-x-full'}`} id="main-navigation-drawer" role={mobileNavOpen ? 'dialog' : undefined}>
+                <div className="flex h-[84px] shrink-0 items-center justify-between gap-2.5 border-b border-white/10 px-5">
+                    <a className="flex min-w-0 items-center gap-2.5" href="/">
+                        <img className="size-11 shrink-0 object-contain" src="/images/fiveCElogo.png" alt="" />
+                        <strong className="text-sm font-black tracking-[0.08em]">FIVE C E GAS</strong>
+                    </a>
+                    <button aria-label="Close navigation" className="grid size-10 shrink-0 place-items-center rounded-lg text-xl text-white/80 hover:bg-white/10 hover:text-white lg:hidden" onClick={() => setMobileNavOpen(false)} type="button">×</button>
+                </div>
                 {canSwitchBranch ? (
                     <form action="/branch-context" className="mx-4 mt-5" method="POST">
                         <input name="_token" type="hidden" value={document.querySelector('meta[name="csrf-token"]')?.content ?? ''} />
@@ -917,7 +954,7 @@ function App({ root }) {
                 ) : (
                     <div className="mx-4 mt-5 flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-3 text-xs font-semibold text-white/80"><span className="size-2 rounded-full bg-emerald-400 shadow-[0_0_10px_#34d399]" />{root.dataset.branchName || 'Manaoag branch'}<span className="ml-auto text-white/40">⌄</span></div>
                 )}
-                <nav aria-label="Main navigation" className="mt-6 flex-1 space-y-1 px-3">
+                <nav aria-label="Main navigation" className="mt-6 flex-1 space-y-1 px-3" id="main-navigation">
                     <p className="px-3 pb-2 text-[9px] font-extrabold uppercase tracking-[0.2em] text-white/40">Workspace</p>
                     {visibleNavigation.map((item) => {
                         const active = page === item.page;
@@ -928,9 +965,9 @@ function App({ root }) {
                     <div className="flex items-center gap-3 rounded-lg bg-black/10 p-3"><span className="grid size-9 place-items-center rounded-full bg-white/15 text-sm font-extrabold">{userName.slice(0, 1).toUpperCase()}</span><span className="min-w-0 flex-1"><strong className="block truncate text-xs">{userName}</strong><small className="text-[10px] capitalize text-white/65">{root.dataset.role || (isOwner ? 'Owner' : 'Staff')}</small></span><form action="/logout" method="POST"><input type="hidden" name="_token" value={document.querySelector('meta[name="csrf-token"]')?.content ?? ''} /><Button aria-label="Log out" className="size-9 min-h-9 rounded-lg px-0 py-1 text-xs" type="submit">↗</Button></form></div>
                 </div>
             </aside>
-            <div className="min-h-screen min-w-0 lg:pl-[260px]">
+            <div className={`min-h-screen min-w-0 lg:pl-[260px] ${theme === 'dark' ? 'theme-dark' : theme === 'comic' ? 'theme-comic' : ''}`}>
                 <header className="sticky top-0 z-20 flex h-[72px] items-center justify-between border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur-md sm:px-7">
-                    <div className="flex items-center gap-3"><Button aria-label="Open navigation" className="grid size-10 min-h-10 place-items-center rounded-xl px-0 text-lg lg:hidden" onClick={() => setMobileNavOpen(true)}>☰</Button><div className="text-xs text-slate-400 sm:text-sm"><span>Five CE Gas</span><span className="mx-2">/</span><strong className="text-slate-800">{pageTitles[page] || 'Overview'}</strong></div></div>
+                    <div className="flex items-center gap-3"><Button aria-controls="main-navigation-drawer" aria-expanded={mobileNavOpen} aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'} className="grid size-10 min-h-10 place-items-center rounded-xl px-0 text-lg lg:hidden" onClick={() => setMobileNavOpen((open) => !open)}>☰</Button><div className="text-xs text-slate-400 sm:text-sm"><span>Five CE Gas</span><span className="mx-2">/</span><strong className="text-slate-800">{pageTitles[page] || 'Overview'}</strong></div></div>
                     <div className="flex items-center gap-3 sm:gap-5">
                         <div className="relative" ref={notificationsRef}>
                             <Button
@@ -1010,7 +1047,7 @@ function App({ root }) {
                     {page !== 'setup' && root.dataset.status && <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800" role="status">{root.dataset.status}</div>}
                     {page !== 'setup' && root.dataset.error && <div className="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800" role="alert">{root.dataset.error}</div>}
                     {workspaceError && <div className="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800" role="alert">Could not load station data: {workspaceError}</div>}
-                    {!workspace && !workspaceError && <p className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500">Loading live station data…</p>}
+                    {page !== 'settings' && !workspace && !workspaceError && <p className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500">Loading live station data…</p>}
                     {pageContent[page] || (workspace && <WorkspacePage data={workspace} page="dashboard" root={root} userName={userName} />)}
                 </main>
             </div>

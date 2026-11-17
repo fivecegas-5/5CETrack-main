@@ -972,13 +972,29 @@ class FuelOperationsTest extends TestCase
             'branch_id' => $sanFabian->id,
         ]))->assertNotFound();
 
+        $otherProduct = FuelProduct::create(['name' => 'Export-only fuel']);
+        FuelSale::create([
+            'branch_id' => $branch->id,
+            'fuel_nozzle_id' => $nozzle->id,
+            'fuel_product_id' => $otherProduct->id,
+            'receipt_number' => 'EXPORT-OTHER-FUEL',
+            'liters' => 5,
+            'price_per_liter' => 80,
+            'total_amount' => 400,
+            'sold_at' => now(),
+            'recorded_by' => $manager->id,
+        ]);
+
         $csvResponse = $this->actingAs($manager)->get(route('api.reports.sales.csv', [
             'from' => now()->toDateString(),
             'to' => now()->toDateString(),
+            'fuel_product_id' => $product->id,
         ]))->assertOk()
             ->assertHeader('content-type', 'text/csv; charset=UTF-8')
             ->assertStreamed();
-        $this->assertStringContainsString('SHIFT-001', $csvResponse->streamedContent());
+        $csv = $csvResponse->streamedContent();
+        $this->assertStringContainsString('SHIFT-001', $csv);
+        $this->assertStringNotContainsString('EXPORT-OTHER-FUEL', $csv);
     }
 
     public function test_inactive_accounts_cannot_sign_in_and_managers_can_deactivate_only_branch_staff(): void

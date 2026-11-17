@@ -194,7 +194,11 @@ class ReportController extends Controller
     public function salesCsv(Request $request): StreamedResponse
     {
         [$branchId, $from, $to] = $this->filters($request);
+        $fuelProductId = $request->validate([
+            'fuel_product_id' => ['nullable', 'integer', 'exists:fuel_products,id'],
+        ])['fuel_product_id'] ?? null;
         $sales = $this->salesQuery($request, $branchId, $from, $to)
+            ->when($fuelProductId !== null, fn (Builder $query) => $query->where('fuel_product_id', $fuelProductId))
             ->with(['branch', 'fuelProduct', 'nozzle', 'recorder'])
             ->orderBy('sold_at');
         $filename = 'fivecetrack-sales-'.$from->toDateString().'-'.$to->toDateString().'.csv';

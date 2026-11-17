@@ -30,6 +30,7 @@ Route::middleware('guest')->group(function (): void {
 Route::middleware(['auth', 'active'])->group(function (): void {
     Route::post('/logout', [AuthController::class, 'destroy'])->name('logout');
     Route::get('/api/workspace', WorkspaceController::class)->name('api.workspace');
+    Route::get('/settings', static fn () => view('settings.index'))->name('settings.index');
     Route::post('/branch-context', [BranchContextController::class, 'update'])
         ->middleware('role:owner')
         ->name('branch-context.update');

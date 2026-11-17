@@ -672,9 +672,6 @@ function Reports({ data, root }) {
         : fuelProducts.filter((product) => String(product.id) === fuelProductId);
     const dailyFuelSales = report?.sales_by_day_and_fuel ?? [];
     const productTotals = report?.sales_by_fuel ?? [];
-    const visibleSales = fuelProductId === 'all'
-        ? sales
-        : productTotals.find((entry) => String(entry.fuel_product_id) === fuelProductId) ?? (report ? { sales_amount: 0, liters: 0, transaction_count: 0 } : null);
     const chartColors = ['#22c55e', '#ef4444', '#fbbf24', '#3b82f6', '#a855f7', '#f97316'];
     const chartSeries = selectedProducts.map((product, index) => {
         const points = days.map((day) => {
@@ -698,16 +695,19 @@ function Reports({ data, root }) {
     const dateLabel = (day) => new Intl.DateTimeFormat('en-PH', { month: 'short', day: 'numeric' }).format(new Date(`${day}T12:00:00`));
     const metricLabel = reportType === 'liters' ? 'Liters sold' : 'Sales revenue';
     const reportLiters = (value) => `${Number(value ?? 0).toLocaleString('en-PH', { maximumFractionDigits: 3 })} ${Number(value) === 1 ? 'Liter' : 'Liters'}`;
-    const exportUrl = new URL(root.dataset.reportsSalesCsvUrl, window.location.origin);
-    exportUrl.searchParams.set('from', fromDate);
-    exportUrl.searchParams.set('to', toDate);
-    exportUrl.searchParams.set('branch_id', root.dataset.activeBranchId);
     const invalidRange = !fromInput || !toInput || fromInput > toInput || fromInput > initialTo || toInput > initialTo || (new Date(`${toInput}T12:00:00`) - new Date(`${fromInput}T12:00:00`)) / 86400000 > 366;
     const generateReport = (event) => {
         event.preventDefault();
         if (invalidRange) return;
         setFromDate(fromInput);
         setToDate(toInput);
+
+        const exportUrl = new URL(root.dataset.reportsSalesCsvUrl, window.location.origin);
+        exportUrl.searchParams.set('from', fromInput);
+        exportUrl.searchParams.set('to', toInput);
+        exportUrl.searchParams.set('branch_id', root.dataset.activeBranchId);
+        if (fuelProductId !== 'all') exportUrl.searchParams.set('fuel_product_id', fuelProductId);
+        window.location.assign(exportUrl.toString());
     };
 
     return (
@@ -718,10 +718,13 @@ function Reports({ data, root }) {
                 <Field label="Fuel type"><Select onChange={(event) => setFuelProductId(event.target.value)} value={fuelProductId}><option value="all">All fuel types</option>{fuelProducts.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</Select></Field>
                 <Field label="Start date"><Input max={toInput || initialTo} onChange={(event) => setFromInput(event.target.value)} type="date" value={fromInput} /></Field>
                 <Field label="End date"><Input max={initialTo} min={fromInput} onChange={(event) => setToInput(event.target.value)} type="date" value={toInput} /></Field>
-                <ActionButton className="min-h-10 md:col-span-2 xl:col-span-1" disabled={invalidRange} type="submit">Generate report</ActionButton>
+                <ActionButton aria-label="Generate report and download CSV" className="min-h-10 md:col-span-2 xl:col-span-1" disabled={invalidRange} type="submit">
+                    <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v4h14v-4" /></svg>
+                    Generate report
+                </ActionButton>
             </form>
             {error && <div className="mb-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800" role="alert">Could not load sales statistics: {error}</div>}
-            <div className="report-layout grid min-w-0 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_220px]">
+            <div className="report-layout grid min-w-0 items-start gap-4">
                 <Panel title="Sales Summary" subtitle={`${dateLabel(fromDate)} – ${dateLabel(toDate)} · ${metricLabel.toLowerCase()}`}>
                     <div aria-label={`Daily ${metricLabel.toLowerCase()} by fuel type`} className="relative overflow-x-auto px-3 pb-3 pt-5 sm:px-5" ref={chartContainerRef} role="img">
                         <svg className="sales-report-chart" role="presentation" viewBox={`0 0 ${chartWidth} 370`} xmlns="http://www.w3.org/2000/svg">
@@ -767,19 +770,6 @@ function Reports({ data, root }) {
                         {chartSeries.map((series) => <span className="flex items-center gap-2" key={series.id}><i className="size-2.5 rounded-full" style={{ backgroundColor: series.color }} />{series.name}</span>)}
                         {!report && !error && <span role="status">Loading sales data…</span>}
                         {report && !dailyFuelSales.length && <span>No sales recorded for this period.</span>}
-                    </div>
-                </Panel>
-                <Panel title="Report Actions">
-                    <div className="grid gap-3 p-4">
-                        <div className="rounded-xl bg-slate-50 p-3">
-                            <p className="text-xs font-semibold text-slate-500">{fuelProductId === 'all' ? 'Total sales' : `${selectedProducts[0]?.name ?? 'Fuel'} sales`}</p>
-                            <p className="mt-1 text-lg font-extrabold text-slate-900">{visibleSales ? money(visibleSales.sales_amount ?? visibleSales.revenue) : '—'}</p>
-                            <p className="text-xs text-slate-600">{visibleSales ? reportLiters(visibleSales.liters) : '—'} · {visibleSales?.transaction_count ?? sales?.transaction_count ?? '—'} transactions</p>
-                        </div>
-                        <a className="flex min-h-10 items-center justify-center gap-2 rounded-lg border border-blue-300 bg-white px-3 py-2 text-sm font-bold text-blue-700 transition hover:bg-blue-50" href={exportUrl.toString()}>
-                            <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v4h14v-4" /></svg>
-                            Download CSV
-                        </a>
                     </div>
                 </Panel>
             </div>
@@ -840,7 +830,48 @@ function Users({ data, root }) {
     );
 }
 
-export default function WorkspacePage({ page, data, root, userName }) {
+function Settings({ theme, onThemeChange }) {
+    return (
+        <>
+            <div className="mb-6">
+                <p className="text-[11px] font-extrabold uppercase tracking-widest text-rose-700">Preferences</p>
+                <h1 className="text-3xl font-extrabold text-slate-900">Settings</h1>
+                <p className="mt-1 text-sm text-slate-500">Personalize how Five CE Gas looks on this device.</p>
+            </div>
+            <section aria-labelledby="theme-preferences-title" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                <div className="flex items-start gap-3">
+                    <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-xl bg-rose-50 text-lg text-rose-700">🖌</span>
+                    <div className="min-w-0">
+                        <h2 className="font-bold text-slate-900" id="theme-preferences-title">Theme Preferences</h2>
+                        <p className="mt-1 text-xs text-slate-500">Choose your preferred appearance for the system.</p>
+                        <fieldset className="mt-4">
+                            <legend className="mb-2 text-xs font-bold text-slate-700">Theme</legend>
+                            <div aria-label="Theme" className="grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-3" role="group">
+                                <button aria-pressed={theme === 'light'} className={`theme-preference-option flex min-h-11 items-center gap-2 rounded-xl border px-4 text-sm font-bold transition ${theme === 'light' ? 'border-rose-300 bg-rose-50 text-rose-700 ring-2 ring-rose-100' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`} onClick={() => onThemeChange('light')} type="button">
+                                    <span aria-hidden="true">☀</span> Light
+                                </button>
+                                <button aria-pressed={theme === 'dark'} className={`theme-preference-option flex min-h-11 items-center gap-2 rounded-xl border px-4 text-sm font-bold transition ${theme === 'dark' ? 'border-rose-300 bg-rose-50 text-rose-700 ring-2 ring-rose-100' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`} onClick={() => onThemeChange('dark')} type="button">
+                                    <span aria-hidden="true">☾</span> Dark
+                                </button>
+                                <button aria-pressed={theme === 'comic'} className={`theme-preference-option flex min-h-11 items-center gap-2 rounded-xl border px-4 text-sm font-bold transition ${theme === 'comic' ? 'border-rose-300 bg-rose-50 text-rose-700 ring-2 ring-rose-100' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`} onClick={() => onThemeChange('comic')} type="button">
+                                    <svg aria-hidden="true" className="size-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.5" viewBox="0 0 24 24">
+                                        <circle cx="12" cy="12" r="3" />
+                                        <circle cx="12" cy="12" r="6" />
+                                        <circle cx="12" cy="12" r="10" />
+                                        <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M19.07 4.93 4.93 19.07" />
+                                    </svg>
+                                    Spider-verse
+                                </button>
+                            </div>
+                        </fieldset>
+                    </div>
+                </div>
+            </section>
+        </>
+    );
+}
+
+export default function WorkspacePage({ page, data, root, userName, theme, onThemeChange }) {
     switch (page) {
         case 'dashboard': return <Dashboard data={data} userName={userName} />;
         case 'inventory': return <Inventory data={data} isOwner={root.dataset.isOwner === 'true'} />;
@@ -851,6 +882,7 @@ export default function WorkspacePage({ page, data, root, userName }) {
         case 'prices': return <Prices data={data} root={root} />;
         case 'reports': return <Reports data={data} root={root} />;
         case 'users': return <Users data={data} root={root} />;
+        case 'settings': return <Settings theme={theme} onThemeChange={onThemeChange} />;
         default: return <Dashboard data={data} userName={userName} />;
     }
 }
