@@ -225,17 +225,16 @@ class CreditAndSalesImportTest extends TestCase
         ])->assertConflict();
     }
 
-    public function test_staff_use_direct_sales_instead_of_importing_csv_files(): void
+    public function test_staff_use_direct_sales_and_import_screen_is_unavailable(): void
     {
         [$branch, $manager, $tank, $nozzle] = $this->station();
         $staff = User::factory()->create(['role' => UserRole::Staff, 'branch_id' => $branch->id]);
-        $this->actingAs($staff)->get(route('sales.import.page'))
-            ->assertForbidden();
+        $this->actingAs($staff)->get('/sales/import')
+            ->assertMethodNotAllowed();
         $this->actingAs($staff)->get(route('sales.index'))
             ->assertOk()
             ->assertSee('data-page="sales"', false)
-            ->assertSee('data-role="staff"', false)
-            ->assertDontSee('data-page="sales-import"', false);
+            ->assertSee('data-role="staff"', false);
 
         $csv = $this->salesCsv([
             ['POS-001', now()->subMinutes(3)->format('Y-m-d H:i:s'), $nozzle->code, '5', 'R-001', 'cash'],

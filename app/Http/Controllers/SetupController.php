@@ -18,6 +18,7 @@ use App\Services\InventoryLedger;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
@@ -28,10 +29,11 @@ class SetupController extends Controller
 
     public function index(Request $request): View
     {
+        $activeBranchId = $this->branchId($request);
         $allBranches = Branch::visibleTo($request->user())->orderBy('name')->get();
         $branches = $allBranches->where('is_active', true)->values();
 
-        $visibleBranchIds = $allBranches->pluck('id');
+        $visibleBranchIds = collect([$activeBranchId]);
 
         $products = FuelProduct::orderBy('name')->get();
         $tanks = FuelTank::with('branch', 'fuelProduct')
@@ -64,6 +66,7 @@ class SetupController extends Controller
             'stockByTank' => $stockByTank,
             'pumps' => $pumps,
             'setupData' => [
+                'activeBranchId' => $activeBranchId,
                 'branches' => $allBranches->map(fn (Branch $branch) => [
                     'id' => $branch->id,
                     'name' => $branch->name,
@@ -579,22 +582,48 @@ class SetupController extends Controller
         $data = $request->validate([
             'fuel_product_id' => ['required', 'integer', Rule::exists('fuel_products', 'id')->where('is_active', true)],
             'price_per_liter' => ['required', 'numeric', 'gt:0', 'max:100000'],
-            'effective_from' => ['required', 'date', 'after_or_equal:now'],
+            'effective_from' => ['required', 'date'],
         ]);
+        $requestedEffectiveFrom = Carbon::parse($data['effective_from']);
+        if ($requestedEffectiveFrom->lt(now()->startOfMinute())) {
+            throw ValidationException::withMessages([
+                'effective_from' => 'The effective time must be now or in the future.',
+            ]);
+        }
 
-        DB::transaction(function () use ($request, $data, $branchId): void {
+        $effectiveTimeAdjusted = DB::transaction(function () use ($request, $data, $branchId, $requestedEffectiveFrom): bool {
             $this->assertBranchActive($branchId);
+            $effectiveFrom = $requestedEffectiveFrom->lte(now())
+                ? now()->startOfSecond()
+                : $requestedEffectiveFrom->startOfSecond();
+            $effectiveTimeAdjusted = false;
+            while (FuelPrice::query()
+                ->where('branch_id', $branchId)
+                ->where('fuel_product_id', $data['fuel_product_id'])
+                ->where('effective_from', $effectiveFrom)
+                ->exists()) {
+                $effectiveFrom->addSecond();
+                $effectiveTimeAdjusted = true;
+            }
+
             $price = FuelPrice::create([
                 'branch_id' => $branchId,
                 'fuel_product_id' => $data['fuel_product_id'],
                 'price_per_liter' => $data['price_per_liter'],
-                'effective_from' => $data['effective_from'],
+                'effective_from' => $effectiveFrom,
                 'set_by' => $request->user()->id,
             ]);
             $this->audit($request, 'fuel-price.created', $price, null, $price->getAttributes());
+
+            return $effectiveTimeAdjusted;
         });
 
-        return back()->with('success', 'Branch fuel price saved with its effective date.');
+        return back()->with(
+            'success',
+            $effectiveTimeAdjusted
+                ? 'Fuel price saved. The selected effective time was already in use, so this price starts at the next available second.'
+                : 'Branch fuel price saved with its effective date.',
+        );
     }
 
     public function updatePrice(Request $request, FuelPrice $price): RedirectResponse
@@ -645,11 +674,8 @@ class SetupController extends Controller
 
     private function assertBranchActive(int $branchId): void
     {
-        abort_unless(
-            Branch::query()->whereKey($branchId)->where('is_active', true)->lockForUpdate()->exists(),
-            422,
-            'This branch is inactive.',
-        );
+        $branch = Branch::query()->whereKey($branchId)->lockForUpdate()->firstOrFail();
+        abort_unless($branch->is_active, 422, 'This branch is inactive.');
     }
 
     private function assertNoOpenShift(int $branchId): void

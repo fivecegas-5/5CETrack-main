@@ -30,6 +30,7 @@ Route::middleware('guest')->group(function (): void {
 Route::middleware(['auth', 'active'])->group(function (): void {
     Route::post('/logout', [AuthController::class, 'destroy'])->name('logout');
     Route::get('/api/workspace', WorkspaceController::class)->name('api.workspace');
+    Route::get('/settings', static fn () => view('settings.index'))->name('settings.index');
     Route::post('/branch-context', [BranchContextController::class, 'update'])
         ->middleware('role:owner')
         ->name('branch-context.update');
@@ -44,8 +45,6 @@ Route::middleware(['auth', 'active'])->group(function (): void {
             ->name('api.sales.import-batches.show');
         Route::post('/api/sales/import-batches/{batch}/confirm', [SalesImportController::class, 'confirm'])
             ->name('api.sales.import-batches.confirm');
-        Route::get('/sales/import', [SalesImportController::class, 'page'])
-            ->name('sales.import.page');
         Route::get('/credit', static fn () => view('operations.credit'))->name('credit.index');
     });
     Route::get('/api/notifications', [NotificationController::class, 'index'])

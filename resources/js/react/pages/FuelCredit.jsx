@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { requestJson } from '../api.js';
+import { requestJson } from './api.js';
 
 const money = (value) => `₱${Number(value ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const csrf = () => document.querySelector('meta[name="csrf-token"]')?.content ?? '';
@@ -28,8 +28,8 @@ function Select({ children, ...props }) {
     return <select className="min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800" {...props}>{children}</select>;
 }
 
-function Button({ children, ...props }) {
-    return <button className="min-h-10 rounded-xl bg-[#9f1239] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#881337] disabled:opacity-60" {...props}>{children}</button>;
+function Button({ children, className = '', ...props }) {
+    return <button className={`primary-gradient min-h-10 rounded-xl px-4 py-2 text-sm font-bold text-white transition disabled:opacity-60 ${className}`} {...props}>{children}</button>;
 }
 
 function Panel({ title, children, subtitle }) {
@@ -39,7 +39,10 @@ function Panel({ title, children, subtitle }) {
 export function FuelCredit({ root }) {
     const [customers, setCustomers] = useState([]);
     const [agreements, setAgreements] = useState([]);
+    const [pumps, setPumps] = useState([]);
     const [nozzles, setNozzles] = useState([]);
+    const [selectedPumpId, setSelectedPumpId] = useState('');
+    const [selectedNozzleId, setSelectedNozzleId] = useState('');
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
     const [busy, setBusy] = useState(false);
@@ -52,9 +55,11 @@ export function FuelCredit({ root }) {
         ]);
         setCustomers(customerResponse.data?.data ?? []);
         setAgreements(agreementResponse.data?.data ?? []);
+        setPumps(workspace.pumps.filter((pump) => pump.is_active
+            && (!root.dataset.activeBranchId || String(pump.branch_id) === root.dataset.activeBranchId)));
         setNozzles(workspace.pumps.flatMap((pump) => pump.nozzles
             .filter((nozzle) => pump.is_active && nozzle.is_active)
-            .map((nozzle) => ({ ...nozzle, branch: pump.branch, pump: pump.label || pump.code }))));
+            .map((nozzle) => ({ ...nozzle, branch_id: pump.branch_id, branch: pump.branch, pump_id: pump.id, pump: pump.label || pump.code }))));
     }, [root]);
 
     useEffect(() => {
@@ -67,9 +72,11 @@ export function FuelCredit({ root }) {
             if (cancelled) return;
             setCustomers(customerResponse.data?.data ?? []);
             setAgreements(agreementResponse.data?.data ?? []);
+            setPumps(workspace.pumps.filter((pump) => pump.is_active
+                && (!root.dataset.activeBranchId || String(pump.branch_id) === root.dataset.activeBranchId)));
             setNozzles(workspace.pumps.flatMap((pump) => pump.nozzles
                 .filter((nozzle) => pump.is_active && nozzle.is_active)
-                .map((nozzle) => ({ ...nozzle, branch: pump.branch, pump: pump.label || pump.code }))));
+                .map((nozzle) => ({ ...nozzle, branch_id: pump.branch_id, branch: pump.branch, pump_id: pump.id, pump: pump.label || pump.code }))));
         }).catch((loadError) => {
             if (!cancelled) setError(loadError.message);
         });
@@ -79,6 +86,12 @@ export function FuelCredit({ root }) {
     const availableNozzles = useMemo(() => nozzles.filter((nozzle) => (
         !root.dataset.activeBranchId || String(nozzle.branch_id) === root.dataset.activeBranchId
     )), [nozzles, root]);
+    const availablePumps = useMemo(() => pumps.filter((pump) => (
+        !root.dataset.activeBranchId || String(pump.branch_id) === root.dataset.activeBranchId
+    )), [pumps, root]);
+    const pumpNozzles = useMemo(() => availableNozzles.filter((nozzle) => (
+        String(nozzle.pump_id) === selectedPumpId
+    )), [availableNozzles, selectedPumpId]);
 
     async function runAction(action, successMessage) {
         setBusy(true);
@@ -121,7 +134,11 @@ export function FuelCredit({ root }) {
         if (await runAction(
             () => requestJson(root.dataset.creditAgreementsUrl, { method: 'POST', body }),
             'Agreement and installment schedule recorded.',
-        )) event.currentTarget.reset();
+        )) {
+            event.currentTarget.reset();
+            setSelectedPumpId('');
+            setSelectedNozzleId('');
+        }
     }
 
     async function recordPayment(event, agreementId) {
@@ -183,10 +200,30 @@ export function FuelCredit({ root }) {
                         <Button disabled={busy} type="submit">Add customer</Button>
                     </form>
                 </Panel>
-                <Panel title="Issue a credit agreement" subtitle="Creates a sale and deducts stock from the selected nozzle">
+                <Panel title="Issue a credit agreement" subtitle="Creates a sale and deducts stock from the selected pump nozzle">
                     <form className="grid gap-3 p-5" onSubmit={saveAgreement}>
                         <Field label="Customer"><Select name="fuel_credit_customer_id" required><option value="">Select customer</option>{customers.filter((customer) => customer.is_active).map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</Select></Field>
-                        <Field label="Pump nozzle"><Select name="fuel_nozzle_id" required><option value="">Select pump nozzle</option>{availableNozzles.map((nozzle) => <option key={nozzle.id} value={nozzle.id}>{nozzle.branch} · {nozzle.pump} · {nozzle.code} · {nozzle.fuel}</option>)}</Select></Field>
+                        <Field label="Pump">
+                            <Select onChange={(event) => {
+                                setSelectedPumpId(event.target.value);
+                                setSelectedNozzleId('');
+                            }} value={selectedPumpId}>
+                                <option value="">Select pump</option>
+                                {availablePumps.map((pump) => <option key={pump.id} value={pump.id}>{pump.label || pump.code} · {pump.code} · {pump.branch}</option>)}
+                            </Select>
+                        </Field>
+                        <Field label="Pump nozzle">
+                            <Select disabled={!selectedPumpId || !pumpNozzles.length} name="fuel_nozzle_id" onChange={(event) => setSelectedNozzleId(event.target.value)} required value={selectedNozzleId}>
+                                <option value="">{!selectedPumpId ? 'Select a pump first' : pumpNozzles.length ? 'Select pump nozzle' : 'No active nozzles on this pump'}</option>
+                                {pumpNozzles.map((nozzle) => <option key={nozzle.id} value={nozzle.id}>{nozzle.code} · {nozzle.fuel} · {nozzle.tank}</option>)}
+                            </Select>
+                        </Field>
+                        {!availablePumps.length && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800" role="status">
+                            No active pumps are configured for {root.dataset.branchName || 'this branch'}. <a className="font-bold underline" href="/setup">Open Station Setup to add a pump and nozzle.</a>
+                        </div>}
+                        {availablePumps.length > 0 && !availableNozzles.length && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800" role="status">
+                            No active pump nozzles are configured for {root.dataset.branchName || 'this branch'}. <a className="font-bold underline" href="/setup">Open Station Setup to connect a nozzle to a tank.</a>
+                        </div>}
                         <div className="grid gap-3 sm:grid-cols-2"><Field label="Liters"><Input min="0.001" name="liters" required step="0.001" type="number" /></Field><Field label="Monthly payment"><Input min="0.01" name="monthly_payment_amount" required step="0.01" type="number" /></Field></div>
                         <div className="grid gap-3 sm:grid-cols-2"><Field label="First due date"><Input min={new Date().toISOString().slice(0, 10)} name="first_due_date" required type="date" /></Field><Field label="Agreement reference"><Input name="agreement_reference" /></Field></div>
                         <Field label="Agreement document (optional)"><Input accept=".pdf,.jpg,.jpeg,.png" name="agreement" type="file" /></Field>
@@ -212,7 +249,7 @@ export function FuelCredit({ root }) {
                                 <Field label="Name"><Input defaultValue={customer.name} name="name" required /></Field>
                                 <Field label="Email"><Input autoComplete="email" defaultValue={customer.email || ''} name="email" type="email" /></Field>
                                 <Field label="Phone"><Input defaultValue={customer.phone || ''} name="phone" /></Field>
-                                <Button disabled={busy} type="submit">Save customer</Button>
+                                <Button className="min-h-9 justify-self-start px-4 py-1.5" disabled={busy} type="submit">Save customer</Button>
                             </form>
                             <Button disabled={busy} onClick={() => updateCustomerStatus(customer)} type="button">{customer.is_active ? 'Archive customer' : 'Reactivate customer'}</Button>
                         </div>

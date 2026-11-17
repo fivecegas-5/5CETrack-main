@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { requestJson } from '../api.js';
+import { requestJson } from './api.js';
 
 const dateTime = (value) => value
     ? new Intl.DateTimeFormat('en-PH', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
