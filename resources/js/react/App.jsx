@@ -524,7 +524,7 @@ function SetupPage({ data, activeBranchId, status, error }) {
                         </Button>
                     </ServerForm>
                 </Panel>
-                <Panel allowOverflow title="Pump and nozzle map" subtitle="Physical pump labels are branch-specific; internal codes stay unique for the POS.">
+                <Panel allowOverflow title="Pump and nozzle map" subtitle="Each nozzle follows the current branch price for the fuel connected to its tank.">
                     <div className="grid gap-3 p-5 sm:grid-cols-2">
                         {data.pumps.map((pump) => (
                             <article className="rounded-xl border border-slate-200 p-4" key={pump.id}>
@@ -550,7 +550,14 @@ function SetupPage({ data, activeBranchId, status, error }) {
                                 <div className="mt-4 grid gap-2">
                                     {pump.nozzles.map((nozzle) => (
                                         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2" key={nozzle.id}>
-                                            <span className="text-xs font-semibold text-slate-700">{nozzle.productName} · {nozzle.code} · {nozzle.tankCode}</span>
+                                            <div className="min-w-0">
+                                                <p className="text-xs font-semibold text-slate-700">{nozzle.productName} · {nozzle.code} · {nozzle.tankCode}</p>
+                                                <p className="mt-1 text-[11px] font-bold text-emerald-700">
+                                                    {nozzle.pricePerLiter === null || nozzle.pricePerLiter === undefined
+                                                        ? 'Current price not set'
+                                                        : `Current price · ₱${Number(nozzle.pricePerLiter).toFixed(2)}/L`}
+                                                </p>
+                                            </div>
                                             <div className="flex items-center gap-2">
                                                 <details className="relative open:z-50">
                                                     <summary aria-label={`Edit nozzle ${nozzle.code}`} className="grid size-10 cursor-pointer list-none place-items-center rounded-lg border border-violet-300 bg-white text-violet-700 transition hover:bg-violet-50 [&::-webkit-details-marker]:hidden" title="Edit nozzle"><SetupActionIcon kind="edit" /></summary>
@@ -750,6 +757,7 @@ function AuthPage({ root, page }) {
 
 function App({ root }) {
     const [mobileNavOpen, setMobileNavOpen] = useState(false);
+    const [logoutConfirmationOpen, setLogoutConfirmationOpen] = useState(false);
     const [theme, setTheme] = useState(() => {
         const savedTheme = window.localStorage.getItem('fivece-theme');
         return ['dark', 'comic'].includes(savedTheme) ? savedTheme : 'light';
@@ -839,6 +847,15 @@ function App({ root }) {
         };
     }, [mobileNavOpen]);
 
+    useEffect(() => {
+        if (!logoutConfirmationOpen) return undefined;
+        function closeOnEscape(event) {
+            if (event.key === 'Escape') setLogoutConfirmationOpen(false);
+        }
+        document.addEventListener('keydown', closeOnEscape);
+        return () => document.removeEventListener('keydown', closeOnEscape);
+    }, [logoutConfirmationOpen]);
+
     async function markNotificationRead(notification) {
         if (notification.read_at) return;
         setNotificationActionBusy(true);
@@ -884,7 +901,8 @@ function App({ root }) {
                 workspaceUrl.searchParams.set(parameter, pageUrl.searchParams.get(parameter));
             }
         });
-        requestJson(workspaceUrl)
+        if (page === 'transactions') workspaceUrl.searchParams.set('per_page', '10');
+        requestJson(workspaceUrl, { cache: 'no-store' })
             .then((data) => {
                 if (!cancelled) setWorkspace(data);
             })
@@ -962,7 +980,10 @@ function App({ root }) {
                     })}
                 </nav>
                 <div className="border-t border-white/15 p-4">
-                    <div className="flex items-center gap-3 rounded-lg bg-black/10 p-3"><span className="grid size-9 place-items-center rounded-full bg-white/15 text-sm font-extrabold">{userName.slice(0, 1).toUpperCase()}</span><span className="min-w-0 flex-1"><strong className="block truncate text-xs">{userName}</strong><small className="text-[10px] capitalize text-white/65">{root.dataset.role || (isOwner ? 'Owner' : 'Staff')}</small></span><form action="/logout" method="POST"><input type="hidden" name="_token" value={document.querySelector('meta[name="csrf-token"]')?.content ?? ''} /><Button aria-label="Log out" className="size-9 min-h-9 rounded-lg px-0 py-1 text-xs" type="submit">↗</Button></form></div>
+                    <div className="flex items-center gap-3 rounded-lg bg-black/10 p-3"><span className="grid size-9 place-items-center rounded-full bg-white/15 text-sm font-extrabold">{userName.slice(0, 1).toUpperCase()}</span><span className="min-w-0 flex-1"><strong className="block truncate text-xs">{userName}</strong><small className="text-[10px] capitalize text-white/65">{root.dataset.role || (isOwner ? 'Owner' : 'Staff')}</small></span><Button aria-label="Log out" className="size-9 min-h-9 rounded-lg px-0 py-1 text-xs" onClick={() => {
+                        setMobileNavOpen(false);
+                        setLogoutConfirmationOpen(true);
+                    }} type="button">↗</Button></div>
                 </div>
             </aside>
             <div className={`min-h-screen min-w-0 lg:pl-[260px] ${theme === 'dark' ? 'theme-dark' : theme === 'comic' ? 'theme-comic' : ''}`}>
@@ -1051,6 +1072,36 @@ function App({ root }) {
                     {pageContent[page] || (workspace && <WorkspacePage data={workspace} page="dashboard" root={root} userName={userName} />)}
                 </main>
             </div>
+            {logoutConfirmationOpen && <div className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-slate-950/60 p-4 backdrop-blur-sm" onMouseDown={(event) => {
+                if (event.target === event.currentTarget) setLogoutConfirmationOpen(false);
+            }}>
+                <section aria-describedby="logout-confirmation-description" aria-labelledby="logout-confirmation-title" aria-modal="true" className="relative my-auto w-full max-w-md overflow-hidden rounded-3xl border border-white/70 bg-white shadow-2xl shadow-slate-950/30" role="dialog">
+                    <div className="h-1.5 bg-gradient-to-r from-blue-700 via-rose-700 to-rose-600" />
+                    <div className="p-6 sm:p-7">
+                        <div className="flex items-start justify-between gap-4">
+                            <span className="grid size-14 place-items-center rounded-2xl bg-rose-50 text-rose-700 ring-1 ring-rose-100">
+                                <svg aria-hidden="true" className="size-7" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24">
+                                    <path d="M10 17l5-5-5-5M15 12H3" />
+                                    <path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7" />
+                                </svg>
+                            </span>
+                            <button aria-label="Close logout confirmation" className="grid size-9 place-items-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-700" onClick={() => setLogoutConfirmationOpen(false)} type="button">×</button>
+                        </div>
+                        <h2 className="mt-5 text-xl font-extrabold tracking-tight text-slate-900" id="logout-confirmation-title">Log out of your account?</h2>
+                        <p className="mt-2 text-sm leading-6 text-slate-600" id="logout-confirmation-description">You’ll be signed out of Five CE Gas and returned to the sign-in page.</p>
+                        <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                            <button autoFocus className="inline-flex min-h-11 items-center justify-center rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-bold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-500" onClick={() => setLogoutConfirmationOpen(false)} type="button">Cancel</button>
+                            <form action="/logout" className="sm:flex-none" method="POST">
+                                <input name="_token" type="hidden" value={document.querySelector('meta[name="csrf-token"]')?.content ?? ''} />
+                                <button className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-rose-700 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-rose-900/20 transition hover:bg-rose-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-800 sm:w-auto" type="submit">
+                                    <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3" /><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7" /></svg>
+                                    Log out
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </section>
+            </div>}
         </div>
     );
 }

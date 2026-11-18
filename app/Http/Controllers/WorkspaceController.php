@@ -57,6 +57,7 @@ class WorkspaceController extends Controller
             ->when($request->boolean('my_sales'), fn ($query) => $query->where('recorded_by', $user->id))
             ->with(['branch', 'fuelProduct', 'nozzle.pump', 'recorder'])
             ->latest('sold_at')
+            ->orderByDesc('id')
             ->paginate($pageSize, ['*'], 'sales_page');
         $deliveries = FuelDelivery::query()
             ->whereIn('branch_id', $branchIds)
@@ -69,15 +70,48 @@ class WorkspaceController extends Controller
             ->latest()
             ->paginate($pageSize, ['*'], 'adjustments_page');
 
-        $prices = FuelPrice::query()
+        $priceRecords = FuelPrice::query()
             ->whereIn('branch_id', $branchIds)
-            ->where('effective_from', '<=', now())
             ->with(['branch', 'fuelProduct', 'setter'])
             ->orderByDesc('effective_from')
-            ->get()
+            ->get();
+        $priceChangesById = [];
+        $historyOrderAtById = [];
+        foreach ($priceRecords->groupBy(fn (FuelPrice $price): string => $price->branch_id.'-'.$price->fuel_product_id) as $records) {
+            $records = $records->values();
+            foreach ($records as $index => $price) {
+                $previousPrice = $records->get($index + 1);
+                $newerPrice = $index > 0 ? $records->get($index - 1) : null;
+                $priceChangesById[$price->id] = $previousPrice === null
+                    ? null
+                    : round((float) $price->price_per_liter - (float) $previousPrice->price_per_liter, 2);
+                $historyOrderAtById[$price->id] = $newerPrice?->created_at ?? $price->created_at;
+            }
+        }
+        $effectiveAt = now();
+        $effectivePrices = $priceRecords
+            ->filter(fn (FuelPrice $price): bool => $price->effective_from->lte($effectiveAt));
+        $prices = $effectivePrices
             ->unique(fn (FuelPrice $price): string => $price->branch_id.'-'.$price->fuel_product_id)
             ->sortBy(fn (FuelPrice $price): string => $this->fuelSortKey($price->fuelProduct->name))
             ->values();
+        $currentPriceIds = $prices->pluck('id')->all();
+        $priceHistory = $priceRecords
+            ->reject(fn (FuelPrice $price): bool => in_array($price->id, $currentPriceIds, true))
+            ->sortByDesc(fn (FuelPrice $price): int => $historyOrderAtById[$price->id]?->getTimestamp() ?? 0)
+            ->values();
+        $mapPrice = fn (FuelPrice $price): array => [
+            'id' => $price->id,
+            'branch_id' => $price->branch_id,
+            'branch' => $price->branch->name,
+            'product_id' => $price->fuel_product_id,
+            'fuel' => $price->fuelProduct->name,
+            'price_per_liter' => (float) $price->price_per_liter,
+            'effective_from' => $price->effective_from?->toIso8601String(),
+            'setter' => $price->setter->name,
+            'price_change' => $priceChangesById[$price->id] ?? null,
+            'history_order_at' => $historyOrderAtById[$price->id]?->toIso8601String(),
+        ];
 
         $pumps = FuelPump::query()
             ->whereIn('branch_id', $branchIds)
@@ -93,20 +127,24 @@ class WorkspaceController extends Controller
             ->orderBy('name')
             ->get();
 
-        $todaySales = FuelSale::query()
+        $now = now();
+        $monthStart = $now->copy()->startOfMonth();
+        $monthSales = FuelSale::query()
             ->whereIn('branch_id', $branchIds)
             ->where('status', 'completed')
-            ->whereDate('sold_at', today());
-        $salesTotal = (clone $todaySales)->sum('total_amount');
-        $litersTotal = (clone $todaySales)->sum('liters');
+            ->whereBetween('sold_at', [$monthStart, $now]);
+        $salesTotal = (clone $monthSales)->sum('total_amount');
+        $litersTotal = (clone $monthSales)->sum('liters');
         $stockTotal = $tanks->sum(fn (FuelTank $tank): float => (float) ($stockByTank[$tank->id] ?? 0));
         $pendingDeliveries = FuelDelivery::query()
             ->whereIn('branch_id', $branchIds)
             ->where('status', 'pending')
+            ->whereBetween('created_at', [$monthStart, $now])
             ->count();
         $pendingAdjustments = StockAdjustment::query()
             ->whereIn('branch_id', $branchIds)
             ->where('status', 'pending')
+            ->whereBetween('created_at', [$monthStart, $now])
             ->count();
 
         return response()->json([
@@ -197,16 +235,8 @@ class WorkspaceController extends Controller
                 'deliveries' => $this->paginationData($deliveries),
                 'adjustments' => $this->paginationData($adjustments),
             ],
-            'prices' => $prices->map(fn (FuelPrice $price): array => [
-                'id' => $price->id,
-                'branch_id' => $price->branch_id,
-                'branch' => $price->branch->name,
-                'product_id' => $price->fuel_product_id,
-                'fuel' => $price->fuelProduct->name,
-                'price_per_liter' => (float) $price->price_per_liter,
-                'effective_from' => $price->effective_from?->toIso8601String(),
-                'setter' => $price->setter->name,
-            ])->values(),
+            'prices' => $prices->map($mapPrice)->values(),
+            'price_history' => $priceHistory->map($mapPrice)->values(),
             'pumps' => $pumps->map(fn (FuelPump $pump): array => [
                 'id' => $pump->id,
                 'branch_id' => $pump->branch_id,
@@ -233,9 +263,9 @@ class WorkspaceController extends Controller
                 'is_active' => $staff->is_active,
             ])->values(),
             'summary' => [
-                'today_sales' => (float) $salesTotal,
-                'today_liters' => (float) $litersTotal,
-                'today_transaction_count' => (clone $todaySales)->count(),
+                'month_sales' => (float) $salesTotal,
+                'month_liters' => (float) $litersTotal,
+                'month_transaction_count' => (clone $monthSales)->count(),
                 'stock_liters' => (float) $stockTotal,
                 'pending_deliveries' => $pendingDeliveries,
                 'pending_adjustments' => $pendingAdjustments,

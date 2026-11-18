@@ -58,6 +58,9 @@ class SetupController extends Controller
                 ->get()
                 ->unique(fn (FuelPrice $price) => $price->branch_id.'-'.$price->fuel_product_id)
                 ->values();
+        $pricesByBranchProduct = $prices->keyBy(
+            fn (FuelPrice $price): string => $price->branch_id.'-'.$price->fuel_product_id,
+        );
 
         return view('setup.index', [
             'branches' => $branches,
@@ -107,14 +110,19 @@ class SetupController extends Controller
                     'code' => $pump->code,
                     'label' => $pump->label,
                     'isActive' => $pump->is_active,
-                    'nozzles' => $pump->nozzles->map(fn (FuelNozzle $nozzle) => [
-                        'id' => $nozzle->id,
-                        'code' => $nozzle->code,
-                        'productName' => $nozzle->tank->fuelProduct->name,
-                        'tankId' => $nozzle->fuel_tank_id,
-                        'tankCode' => $nozzle->tank->code,
-                        'isActive' => $nozzle->is_active,
-                    ])->values(),
+                    'nozzles' => $pump->nozzles->map(function (FuelNozzle $nozzle) use ($pump, $pricesByBranchProduct): array {
+                        $price = $pricesByBranchProduct->get($pump->branch_id.'-'.$nozzle->tank->fuel_product_id);
+
+                        return [
+                            'id' => $nozzle->id,
+                            'code' => $nozzle->code,
+                            'productName' => $nozzle->tank->fuelProduct->name,
+                            'tankId' => $nozzle->fuel_tank_id,
+                            'tankCode' => $nozzle->tank->code,
+                            'pricePerLiter' => $price === null ? null : (float) $price->price_per_liter,
+                            'isActive' => $nozzle->is_active,
+                        ];
+                    })->values(),
                 ])->values(),
             ],
             'canChooseBranch' => $request->user()->isOwner() && $request->user()->branch_id === null,
@@ -591,38 +599,23 @@ class SetupController extends Controller
             ]);
         }
 
-        $effectiveTimeAdjusted = DB::transaction(function () use ($request, $data, $branchId, $requestedEffectiveFrom): bool {
-            $this->assertBranchActive($branchId);
-            $effectiveFrom = $requestedEffectiveFrom->lte(now())
-                ? now()->startOfSecond()
-                : $requestedEffectiveFrom->startOfSecond();
-            $effectiveTimeAdjusted = false;
-            while (FuelPrice::query()
-                ->where('branch_id', $branchId)
-                ->where('fuel_product_id', $data['fuel_product_id'])
-                ->where('effective_from', $effectiveFrom)
-                ->exists()) {
-                $effectiveFrom->addSecond();
-                $effectiveTimeAdjusted = true;
-            }
-
-            $price = FuelPrice::create([
-                'branch_id' => $branchId,
-                'fuel_product_id' => $data['fuel_product_id'],
-                'price_per_liter' => $data['price_per_liter'],
-                'effective_from' => $effectiveFrom,
-                'set_by' => $request->user()->id,
-            ]);
-            $this->audit($request, 'fuel-price.created', $price, null, $price->getAttributes());
-
-            return $effectiveTimeAdjusted;
-        });
+        $effectiveFrom = $requestedEffectiveFrom->lte(now())
+            ? now()->startOfSecond()
+            : $requestedEffectiveFrom->startOfSecond();
+        $effectiveTimeAdjusted = $this->syncPriceAcrossBranches(
+            $request,
+            $branchId,
+            (int) $data['fuel_product_id'],
+            (float) $data['price_per_liter'],
+            $effectiveFrom,
+            'fuel-price.created',
+        );
 
         return back()->with(
             'success',
             $effectiveTimeAdjusted
-                ? 'Fuel price saved. The selected effective time was already in use, so this price starts at the next available second.'
-                : 'Branch fuel price saved with its effective date.',
+                ? 'Fuel price saved for all branches. The selected effective time was already in use, so this price starts at the next available second.'
+                : 'Fuel price saved for all branches with its effective date.',
         );
     }
 
@@ -636,40 +629,87 @@ class SetupController extends Controller
             'reason' => ['nullable', 'string', 'max:2000'],
         ]);
 
-        DB::transaction(function () use ($request, $data, $currentPrice): void {
-            $this->assertBranchActive((int) $currentPrice->branch_id);
-            $effectiveFrom = now()->startOfSecond();
+        $this->syncPriceAcrossBranches(
+            $request,
+            (int) $currentPrice->branch_id,
+            (int) $currentPrice->fuel_product_id,
+            (float) $data['price_per_liter'],
+            now()->startOfSecond(),
+            'fuel-price.updated',
+            $data['reason'] ?? null,
+        );
+
+        return back()->with('success', 'Fuel price updated across all branches. Previous sales and price history were preserved.');
+    }
+
+    private function syncPriceAcrossBranches(
+        Request $request,
+        int $sourceBranchId,
+        int $fuelProductId,
+        float $pricePerLiter,
+        Carbon $effectiveFrom,
+        string $action,
+        ?string $reason = null,
+    ): bool {
+        return DB::transaction(function () use ($request, $sourceBranchId, $fuelProductId, $pricePerLiter, $effectiveFrom, $action, $reason): bool {
+            $branchIds = Branch::query()
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->pluck('id')
+                ->all();
+            $this->assertBranchActive($sourceBranchId);
+
+            $effectiveFrom = $effectiveFrom->copy();
+            $effectiveTimeAdjusted = false;
             while (FuelPrice::query()
-                ->where('branch_id', $currentPrice->branch_id)
-                ->where('fuel_product_id', $currentPrice->fuel_product_id)
+                ->whereIn('branch_id', $branchIds)
+                ->where('fuel_product_id', $fuelProductId)
                 ->where('effective_from', $effectiveFrom)
                 ->exists()) {
                 $effectiveFrom->addSecond();
+                $effectiveTimeAdjusted = true;
             }
 
-            $newPrice = FuelPrice::create([
-                'branch_id' => $currentPrice->branch_id,
-                'fuel_product_id' => $currentPrice->fuel_product_id,
-                'price_per_liter' => $data['price_per_liter'],
-                'effective_from' => $effectiveFrom,
-                'set_by' => $request->user()->id,
-            ]);
+            $previousPricesByBranch = FuelPrice::query()
+                ->whereIn('branch_id', $branchIds)
+                ->where('fuel_product_id', $fuelProductId)
+                ->where('effective_from', '<=', $effectiveFrom)
+                ->orderByDesc('effective_from')
+                ->orderByDesc('id')
+                ->get()
+                ->unique('branch_id')
+                ->keyBy('branch_id');
 
-            $this->audit(
-                $request,
-                'fuel-price.updated',
-                $newPrice,
-                ['price_per_liter' => $currentPrice->price_per_liter],
-                [
-                    'price_per_liter' => $newPrice->price_per_liter,
-                    'supersedes_price_id' => $currentPrice->id,
-                    'effective_from' => $newPrice->effective_from->toIso8601String(),
-                    'reason' => $data['reason'] ?? null,
-                ],
-            );
+            foreach ($branchIds as $branchId) {
+                $previousPrice = $previousPricesByBranch->get($branchId);
+                $newPrice = FuelPrice::create([
+                    'branch_id' => $branchId,
+                    'fuel_product_id' => $fuelProductId,
+                    'price_per_liter' => $pricePerLiter,
+                    'effective_from' => $effectiveFrom->copy(),
+                    'set_by' => $request->user()->id,
+                ]);
+
+                if ($action === 'fuel-price.created') {
+                    $before = null;
+                    $after = $newPrice->getAttributes();
+                } else {
+                    $before = $previousPrice === null
+                        ? null
+                        : ['price_per_liter' => $previousPrice->price_per_liter];
+                    $after = [
+                        'price_per_liter' => $newPrice->price_per_liter,
+                        'supersedes_price_id' => $previousPrice?->id,
+                        'effective_from' => $newPrice->effective_from->toIso8601String(),
+                        'reason' => $reason,
+                    ];
+                }
+
+                $this->audit($request, $action, $newPrice, $before, $after);
+            }
+
+            return $effectiveTimeAdjusted;
         });
-
-        return back()->with('success', 'Fuel price updated. Previous sales and price history were preserved.');
     }
 
     private function assertBranchActive(int $branchId): void

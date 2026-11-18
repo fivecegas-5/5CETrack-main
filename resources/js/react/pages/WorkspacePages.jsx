@@ -88,14 +88,41 @@ function Table({ headers, children }) {
     return (
         <div className="min-w-0 max-w-full overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-sm">
-                <thead className="bg-slate-50 text-[11px] font-extrabold uppercase tracking-wider text-slate-500"><tr>{headers.map((header) => <th className="px-4 py-3" key={header}>{header}</th>)}</tr></thead>
+                <thead className="bg-slate-50 text-[11px] font-extrabold uppercase tracking-wider text-slate-500"><tr>{headers.map((header) => <th className={`px-4 py-3 ${header === 'Trend' ? 'w-20 text-center' : ''}`} key={header}>{header}</th>)}</tr></thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">{children}</tbody>
             </table>
         </div>
     );
 }
 
-function PageNavigation({ pagination, parameter }) {
+function PriceChangeIndicator({ change }) {
+    const amount = Number(change);
+    if (change === null || !Number.isFinite(amount)) {
+        return <span aria-label="No previous price" className="text-slate-400" role="img">—</span>;
+    }
+    if (amount === 0) {
+        return <span aria-label="No price change" className="text-slate-400" role="img">—</span>;
+    }
+
+    const increased = amount > 0;
+    const label = increased ? 'Price increased' : 'Price decreased';
+    return (
+        <span
+            aria-label={label}
+            className={`inline-flex justify-center ${increased ? 'text-emerald-700' : 'text-rose-700'}`}
+            role="img"
+            title={`${label} by ${money(Math.abs(amount))}/L`}
+        >
+            <svg aria-hidden="true" className="size-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" viewBox="0 0 24 24">
+                {increased
+                    ? <path d="M12 19V5m-7 7 7-7 7 7" />
+                    : <path d="M12 5v14m7-7-7 7-7-7" />}
+            </svg>
+        </span>
+    );
+}
+
+function PageNavigation({ pagination, parameter, editablePage = false }) {
     if (!pagination || pagination.last_page < 2) return null;
     const pageUrl = (page) => {
         const url = new URL(window.location.href);
@@ -103,14 +130,38 @@ function PageNavigation({ pagination, parameter }) {
         else url.searchParams.set(parameter, page);
         return `${url.pathname}${url.search}${url.hash}`;
     };
+    const goToPage = (event) => {
+        event.preventDefault();
+        const page = Number(new FormData(event.currentTarget).get('page'));
+        if (Number.isInteger(page) && page >= 1 && page <= pagination.last_page) {
+            window.location.assign(pageUrl(page));
+        }
+    };
 
     return (
         <nav aria-label="Pagination" className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3 text-xs">
             <span className="text-slate-500">Page {pagination.current_page} of {pagination.last_page} · {pagination.total} records</span>
-            <div className="flex gap-2">
-                {pagination.current_page > 1 && <a className="rounded-lg border border-slate-200 px-3 py-2 font-bold text-slate-700" href={pageUrl(pagination.current_page - 1)}>Previous</a>}
-                {pagination.current_page < pagination.last_page && <a className="rounded-lg border border-slate-200 px-3 py-2 font-bold text-slate-700" href={pageUrl(pagination.current_page + 1)}>Next</a>}
-            </div>
+            {editablePage ? (
+                <div className="flex items-center gap-2">
+                    <button aria-label="Previous page" className="grid size-9 place-items-center rounded-lg border border-slate-200 text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40" disabled={pagination.current_page <= 1} onClick={() => window.location.assign(pageUrl(pagination.current_page - 1))} title="Previous page" type="button">
+                        <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg>
+                    </button>
+                    <form className="flex items-center gap-2" onSubmit={goToPage}>
+                        <label className="sr-only" htmlFor="transactions-page-number">Go to page</label>
+                        <input aria-label="Go to page" className="h-9 w-16 rounded-lg border border-slate-200 px-2 text-center text-sm font-semibold text-slate-800 outline-none focus:border-rose-400 focus:ring-4 focus:ring-rose-100" defaultValue={pagination.current_page} id="transactions-page-number" max={pagination.last_page} min="1" name="page" required type="number" />
+                        <span className="text-slate-500">of {pagination.last_page}</span>
+                        <button className="rounded-lg border border-slate-200 px-3 py-2 font-bold text-slate-700 transition hover:bg-slate-50" type="submit">Go</button>
+                    </form>
+                    <button aria-label="Next page" className="grid size-9 place-items-center rounded-lg border border-slate-200 text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40" disabled={pagination.current_page >= pagination.last_page} onClick={() => window.location.assign(pageUrl(pagination.current_page + 1))} title="Next page" type="button">
+                        <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
+                    </button>
+                </div>
+            ) : (
+                <div className="flex gap-2">
+                    {pagination.current_page > 1 && <a className="rounded-lg border border-slate-200 px-3 py-2 font-bold text-slate-700" href={pageUrl(pagination.current_page - 1)}>Previous</a>}
+                    {pagination.current_page < pagination.last_page && <a className="rounded-lg border border-slate-200 px-3 py-2 font-bold text-slate-700" href={pageUrl(pagination.current_page + 1)}>Next</a>}
+                </div>
+            )}
         </nav>
     );
 }
@@ -274,10 +325,10 @@ function Dashboard({ data, userName }) {
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {[
-                    ['Today’s sales', money(summary.today_sales)],
-                    ['Fuel dispensed today', liters(summary.today_liters)],
-                    ['Recorded transactions', summary.today_transaction_count],
-                    ['Pending reviews', summary.pending_deliveries + summary.pending_adjustments],
+                    ['Sales this month', money(summary.month_sales)],
+                    ['Fuel dispensed this month', liters(summary.month_liters)],
+                    ['Transactions this month', summary.month_transaction_count],
+                    ['Pending reviews this month', summary.pending_deliveries + summary.pending_adjustments],
                 ].map(([label, value]) => <article className="rounded-xl border border-slate-200 bg-white p-4" key={label}><p className="text-xs font-medium text-slate-500">{label}</p><p className="mt-1 text-lg font-extrabold text-slate-900">{value}</p></article>)}
             </div>
         </div>
@@ -390,7 +441,7 @@ function Transactions({ data, isOwner }) {
             <div className="mb-6"><p className="text-[11px] font-extrabold uppercase tracking-widest text-rose-700">Activity ledger</p><h1 className="text-3xl font-extrabold text-slate-900">Transactions</h1><p className="mt-1 text-sm text-slate-500">Imported transactions are marked read-only and cannot be changed or voided.</p></div>
             <Panel allowOverflow title="Sales activity" subtitle={`${filtered.length} records on this page · ${data.pagination.sales.total} total`} action={<div className="flex flex-wrap items-center gap-3"><Input aria-label="Search sales on this page" onChange={(event) => setQuery(event.target.value)} placeholder="Search this page…" value={query} />{!isOwner && <a className="whitespace-nowrap text-xs font-bold text-rose-700 hover:text-rose-900" href={salesFilterUrl()}>{mySalesOnly ? 'Show all branch sales' : 'My sales'}</a>}</div>}>
                 <SalesTable sales={filtered} />
-                <PageNavigation pagination={data.pagination.sales} parameter="sales_page" />
+                <PageNavigation editablePage pagination={data.pagination.sales} parameter="sales_page" />
             </Panel>
         </>
     );
@@ -412,7 +463,7 @@ function Sales({ data, root }) {
                         <BranchField data={data} root={root} />
                         <Field label="Pump nozzle"><Select name="fuel_nozzle_id" required><option value="">Choose a pump/nozzle</option>{options.map((nozzle) => <option key={nozzle.id} value={nozzle.id}>{nozzle.branch} · {nozzle.pump} · {nozzle.code} · {nozzle.fuel} ({money(pricesByBranchProduct.get(`${nozzle.branch_id}-${data.products.find((product) => product.name === nozzle.fuel)?.id}`))}/L)</option>)}</Select></Field>
                         <Field label="Liters"><Input max="100000" min="0.001" name="liters" required step="0.001" type="number" /></Field>
-                        <Field label="Receipt number"><Input maxLength="100" name="receipt_number" /></Field>
+                        <Field label="Receipt number"><Input maxLength="100" name="receipt_number" placeholder="Enter receipt number (optional)" /></Field>
                         <Field label="Payment method"><Select name="payment_method"><option value="">Not specified</option><option value="cash">Cash</option><option value="card">Card</option><option value="ewallet">E-wallet</option><option value="other">Other</option></Select></Field>
                         <Field label="Sale time"><Input defaultValue={localDateTime()} max={localDateTime()} name="sold_at" required type="datetime-local" /></Field>
                         <ActionButton className="min-h-11 text-sm" type="submit">Record sale</ActionButton>
@@ -551,8 +602,22 @@ function Adjustments({ data, root }) {
 
 function Prices({ data, root }) {
     const effectiveFromChanged = useRef(false);
+    const [historyPageInput, setHistoryPageInput] = useState('1');
     const activeProducts = data.products.filter((product) => product.is_active);
     const branchPrices = [...data.prices].sort((left, right) => compareFuelNames(left.fuel, right.fuel));
+    const priceHistory = [...data.price_history].sort(
+        (left, right) => Date.parse(right.history_order_at) - Date.parse(left.history_order_at),
+    );
+    const historyPageSize = 5;
+    const historyPageCount = Math.max(1, Math.ceil(priceHistory.length / historyPageSize));
+    const requestedHistoryPage = Number(historyPageInput);
+    const historyPage = historyPageInput === ''
+        ? 1
+        : Math.min(historyPageCount, Math.max(1, Number.isInteger(requestedHistoryPage) ? requestedHistoryPage : 1));
+    const visiblePriceHistory = priceHistory.slice(
+        (historyPage - 1) * historyPageSize,
+        historyPage * historyPageSize,
+    );
     const priceTone = (index) => [
         'bg-emerald-50 text-emerald-800',
         'bg-rose-50 text-rose-800',
@@ -563,7 +628,7 @@ function Prices({ data, root }) {
             <div className="mb-6">
                 <p className="text-[11px] font-extrabold uppercase tracking-widest text-rose-700">Price management</p>
                 <h1 className="text-3xl font-extrabold text-slate-900">Fuel prices</h1>
-                <p className="mt-1 text-sm text-slate-500">Current branch prices · updates are recorded in the price audit history.</p>
+                <p className="mt-1 text-sm text-slate-500">Price changes sync across all branches and are recorded in the audit history.</p>
             </div>
             <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {branchPrices.map((price, index) => (
@@ -583,18 +648,78 @@ function Prices({ data, root }) {
                 {!branchPrices.length && <p className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500">No current fuel prices configured for this branch.</p>}
             </div>
             <div className="mb-5 grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(280px,.8fr)]">
-                <Panel allowOverflow title="Current price list" subtitle="Current effective price by fuel; previous prices remain in the audit history">
-                    <Table headers={['Fuel', 'Price per liter', 'Effective from', 'Set by']}>
-                        {branchPrices.map((price) => <tr key={price.id}>
-                            <td className="px-4 py-3 font-semibold">{price.fuel}</td>
-                            <td className="px-4 py-3 font-bold">{money(price.price_per_liter)}</td>
-                            <td className="px-4 py-3 whitespace-nowrap">{dateTime(price.effective_from)}</td>
-                            <td className="px-4 py-3">{price.setter}</td>
-                        </tr>)}
-                        {!branchPrices.length && <tr><td className="px-4 py-8 text-center text-slate-500" colSpan="4">No current prices for this branch.</td></tr>}
-                    </Table>
-                </Panel>
-                <Panel title="Update fuel prices" subtitle="Creates a new effective price record">
+                <div className="grid min-w-0 gap-5">
+                    <Panel allowOverflow title="Current price list" subtitle="Current effective price by fuel">
+                        <Table headers={['Fuel', 'Price per liter', 'Effective from', 'Set by', 'Trend']}>
+                            {branchPrices.map((price) => <tr key={price.id}>
+                                <td className="px-4 py-3 font-semibold">{price.fuel}</td>
+                                <td className="px-4 py-3 font-bold">{money(price.price_per_liter)}</td>
+                                <td className="px-4 py-3 whitespace-nowrap">{dateTime(price.effective_from)}</td>
+                                <td className="px-4 py-3">{price.setter}</td>
+                                <td className="w-20 px-4 py-3 text-center"><PriceChangeIndicator change={price.price_change} /></td>
+                            </tr>)}
+                            {!branchPrices.length && <tr><td className="px-4 py-8 text-center text-slate-500" colSpan="5">No current prices for this branch.</td></tr>}
+                        </Table>
+                    </Panel>
+                    <Panel allowOverflow title="Price history" subtitle="Previous and scheduled prices, newest entered first">
+                        <Table headers={['Fuel', 'Price per liter', 'Effective from', 'Set by', 'Trend']}>
+                            {visiblePriceHistory.map((price) => <tr key={price.id}>
+                                <td className="px-4 py-3 font-semibold">{price.fuel}</td>
+                                <td className="px-4 py-3 font-bold">{money(price.price_per_liter)}</td>
+                                <td className="px-4 py-3 whitespace-nowrap">{dateTime(price.effective_from)}</td>
+                                <td className="px-4 py-3">{price.setter}</td>
+                                <td className="w-20 px-4 py-3 text-center"><PriceChangeIndicator change={price.price_change} /></td>
+                            </tr>)}
+                            {!priceHistory.length && <tr><td className="px-4 py-8 text-center text-slate-500" colSpan="5">No previous or scheduled prices for this branch.</td></tr>}
+                        </Table>
+                        {priceHistory.length > historyPageSize && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+                            <span>Showing {(historyPage - 1) * historyPageSize + 1}–{Math.min(historyPage * historyPageSize, priceHistory.length)} of {priceHistory.length}</span>
+                            <div className="flex items-center gap-2 font-semibold">
+                                <span>Page</span>
+                                <button
+                                    aria-label="Previous price history page"
+                                    className="grid size-8 place-items-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                    disabled={historyPage <= 1}
+                                    onClick={() => setHistoryPageInput(String(historyPage - 1))}
+                                    type="button"
+                                >
+                                    <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg>
+                                </button>
+                                <input
+                                    aria-label="Price history page number"
+                                    className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-center text-sm text-slate-800 outline-none focus:border-rose-400 focus:ring-2 focus:ring-rose-100"
+                                    max={historyPageCount}
+                                    min="1"
+                                    onBlur={() => setHistoryPageInput(String(historyPage))}
+                                    onChange={(event) => {
+                                        const value = event.currentTarget.value;
+                                        if (value === '') {
+                                            setHistoryPageInput('');
+                                            return;
+                                        }
+                                        const page = Number(value);
+                                        if (Number.isInteger(page)) {
+                                            setHistoryPageInput(String(Math.min(historyPageCount, Math.max(1, page))));
+                                        }
+                                    }}
+                                    type="number"
+                                    value={historyPageInput === '' ? '' : historyPage}
+                                />
+                                <button
+                                    aria-label="Next price history page"
+                                    className="grid size-8 place-items-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                    disabled={historyPage >= historyPageCount}
+                                    onClick={() => setHistoryPageInput(String(historyPage + 1))}
+                                    type="button"
+                                >
+                                    <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
+                                </button>
+                                <span>of {historyPageCount}</span>
+                            </div>
+                        </div>}
+                    </Panel>
+                </div>
+                <Panel title="Update fuel prices" subtitle="Creates a synchronized effective price record for every branch">
                     <Form action="/setup/prices" className="grid gap-3 p-4 sm:p-5" onSubmit={(event) => {
                         if (!effectiveFromChanged.current) {
                             const effectiveFromInput = event.currentTarget.elements.namedItem('effective_from');
