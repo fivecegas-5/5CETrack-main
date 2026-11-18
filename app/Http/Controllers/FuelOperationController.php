@@ -101,6 +101,7 @@ class FuelOperationController extends Controller
                 ->where('branch_id', $branchId)
                 ->with('fuelProduct', 'nozzle.pump', 'recorder')
                 ->latest('sold_at')
+                ->orderByDesc('id')
                 ->limit(30)
                 ->get(),
         ]);

@@ -25,6 +25,7 @@ class ReportController extends Controller
         return $this->salesQuery($request, $branchId, $from, $to)
             ->with(['branch', 'fuelProduct', 'nozzle.pump', 'recorder', 'shift'])
             ->orderByDesc('sold_at')
+            ->orderByDesc('id')
             ->paginate($pageSize);
     }
 

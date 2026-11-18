@@ -537,6 +537,107 @@ class FuelOperationsTest extends TestCase
             ->assertSee('data-page="dashboard"', false);
     }
 
+    public function test_workspace_lists_previous_and_scheduled_prices_for_the_active_branch(): void
+    {
+        [$branch, $otherBranch] = $this->branches();
+        $manager = User::factory()->create(['role' => UserRole::Owner, 'branch_id' => $branch->id]);
+        $otherManager = User::factory()->create(['role' => UserRole::Owner, 'branch_id' => $otherBranch->id]);
+        $pricesByFuel = [];
+        $priceValues = [
+            'Diesel' => ['previous' => 60, 'current' => 65, 'scheduled' => 70, 'previous_days_ago' => 3, 'current_created_hours_ago' => 3, 'scheduled_days_ahead' => 3, 'scheduled_created_hours_ago' => 4],
+            'Premium' => ['previous' => 70, 'current' => 65, 'scheduled' => 60, 'previous_days_ago' => 4, 'current_created_hours_ago' => 1, 'scheduled_days_ahead' => 1, 'scheduled_created_hours_ago' => 5],
+            'Unleaded' => ['previous' => 55, 'current' => 60, 'scheduled' => 57, 'previous_days_ago' => 5, 'current_created_hours_ago' => 2, 'scheduled_days_ahead' => 2, 'scheduled_created_hours_ago' => 6],
+        ];
+        foreach ($priceValues as $fuel => $values) {
+            $product = FuelProduct::create(['name' => $fuel]);
+            $pricesByFuel[$fuel] = [
+                'previous' => FuelPrice::create([
+                    'branch_id' => $branch->id,
+                    'fuel_product_id' => $product->id,
+                    'price_per_liter' => $values['previous'],
+                    'effective_from' => now()->subDays($values['previous_days_ago']),
+                    'set_by' => $manager->id,
+                ]),
+                'current' => FuelPrice::create([
+                    'branch_id' => $branch->id,
+                    'fuel_product_id' => $product->id,
+                    'price_per_liter' => $values['current'],
+                    'effective_from' => now()->subDay(),
+                    'set_by' => $manager->id,
+                ]),
+                'scheduled' => FuelPrice::create([
+                    'branch_id' => $branch->id,
+                    'fuel_product_id' => $product->id,
+                    'price_per_liter' => $values['scheduled'],
+                    'effective_from' => now()->addDays($values['scheduled_days_ahead']),
+                    'set_by' => $manager->id,
+                ]),
+            ];
+            $currentCreatedAt = now()->subHours($values['current_created_hours_ago']);
+            $pricesByFuel[$fuel]['current']
+                ->forceFill(['created_at' => $currentCreatedAt, 'updated_at' => $currentCreatedAt])
+                ->saveQuietly();
+            $scheduledCreatedAt = now()->subHours($values['scheduled_created_hours_ago']);
+            $pricesByFuel[$fuel]['scheduled']
+                ->forceFill(['created_at' => $scheduledCreatedAt, 'updated_at' => $scheduledCreatedAt])
+                ->saveQuietly();
+        }
+
+        $otherBranchPrice = FuelPrice::create([
+            'branch_id' => $otherBranch->id,
+            'fuel_product_id' => $pricesByFuel['Diesel']['current']->fuel_product_id,
+            'price_per_liter' => 55,
+            'effective_from' => now()->subDays(3),
+            'set_by' => $otherManager->id,
+        ]);
+
+        $workspace = $this->actingAs($manager)->getJson(route('api.workspace'))
+            ->assertOk()
+            ->json();
+
+        $this->assertCount(3, $workspace['prices']);
+        $this->assertCount(6, $workspace['price_history']);
+        $this->assertSame([
+            $pricesByFuel['Premium']['previous']->id,
+            $pricesByFuel['Unleaded']['previous']->id,
+            $pricesByFuel['Diesel']['previous']->id,
+            $pricesByFuel['Diesel']['scheduled']->id,
+            $pricesByFuel['Premium']['scheduled']->id,
+            $pricesByFuel['Unleaded']['scheduled']->id,
+        ], collect($workspace['price_history'])->pluck('id')->all());
+        foreach ($pricesByFuel as $fuel => $records) {
+            $currentPrice = collect($workspace['prices'])->firstWhere('fuel', $fuel);
+            $this->assertNotNull($currentPrice);
+            $this->assertEquals($records['current']->price_per_liter, $currentPrice['price_per_liter']);
+            $this->assertEquals(
+                (float) $records['current']->price_per_liter - (float) $records['previous']->price_per_liter,
+                $currentPrice['price_change'],
+            );
+
+            $history = collect($workspace['price_history'])->where('fuel', $fuel);
+            $this->assertCount(2, $history);
+            $scheduledPrice = $history->firstWhere('id', $records['scheduled']->id);
+            $this->assertSame(
+                $records['scheduled']->id,
+                $scheduledPrice['id'],
+            );
+            $this->assertEquals(
+                (float) $records['scheduled']->price_per_liter - (float) $records['current']->price_per_liter,
+                $scheduledPrice['price_change'],
+            );
+            $this->assertNull($history->firstWhere('id', $records['previous']->id)['price_change']);
+            $this->assertSame(
+                $manager->name,
+                $history->firstWhere('id', $records['previous']->id)['setter'],
+            );
+            $this->assertSame($branch->id, $history->first()['branch_id']);
+        }
+        $this->assertNotContains(
+            $otherBranchPrice->id,
+            collect($workspace['price_history'])->pluck('id')->all(),
+        );
+    }
+
     public function test_dashboard_shows_only_the_owner_assigned_branch(): void
     {
         [$manaoag, $sanFabian] = $this->branches();
@@ -600,6 +701,102 @@ class FuelOperationsTest extends TestCase
             ->assertOk()
             ->assertJsonPath('user.branch', 'San Fabian')
             ->assertDontSee('Manaoag');
+    }
+
+    public function test_dashboard_summary_reports_month_to_date_sales_and_pending_reviews(): void
+    {
+        $this->travelTo(now()->copy()->setDate(2026, 11, 18)->setTime(12, 0));
+        [$branch] = $this->branches();
+        $manager = User::factory()->create(['role' => UserRole::Owner, 'branch_id' => $branch->id]);
+        [$tank, $nozzle, $product] = $this->stationEquipment($branch);
+        $monthStart = now()->startOfMonth();
+        $previousMonth = $monthStart->copy()->subSecond();
+
+        $createSale = function (string $receipt, int $liters, int $amount, $soldAt, string $status = 'completed') use ($branch, $manager, $nozzle, $product): void {
+            FuelSale::create([
+                'branch_id' => $branch->id,
+                'fuel_nozzle_id' => $nozzle->id,
+                'fuel_product_id' => $product->id,
+                'receipt_number' => $receipt,
+                'liters' => $liters,
+                'price_per_liter' => 60,
+                'total_amount' => $amount,
+                'sold_at' => $soldAt,
+                'recorded_by' => $manager->id,
+                'status' => $status,
+            ]);
+        };
+        $createSale('MONTH-001', 10, 600, $monthStart->copy()->addDay());
+        $createSale('MONTH-002', 5, 300, now()->subDay());
+        $createSale('PREVIOUS-001', 100, 6000, $previousMonth);
+        $createSale('VOIDED-001', 20, 1200, now()->subDay(), 'voided');
+
+        $createDelivery = function (string $reference, string $status) use ($branch, $manager, $tank): FuelDelivery {
+            return FuelDelivery::create([
+                'branch_id' => $branch->id,
+                'fuel_tank_id' => $tank->id,
+                'supplier_name' => 'Monthly supplier',
+                'delivery_reference' => $reference,
+                'delivered_liters' => 10,
+                'cost_per_liter' => 50,
+                'total_cost' => 500,
+                'received_at' => now(),
+                'recorded_by' => $manager->id,
+                'status' => $status,
+            ]);
+        };
+        $createDelivery('MONTH-PENDING', 'pending');
+        $oldDelivery = $createDelivery('OLD-PENDING', 'pending');
+        $oldDelivery->forceFill(['created_at' => $previousMonth, 'updated_at' => $previousMonth])->saveQuietly();
+
+        $createAdjustment = function (string $reason, string $status) use ($branch, $manager, $tank): StockAdjustment {
+            return StockAdjustment::create([
+                'branch_id' => $branch->id,
+                'fuel_tank_id' => $tank->id,
+                'quantity_change_liters' => 1,
+                'reason' => $reason,
+                'status' => $status,
+                'requested_by' => $manager->id,
+            ]);
+        };
+        $createAdjustment('This month pending adjustment', 'pending');
+        $oldAdjustment = $createAdjustment('Old pending adjustment', 'pending');
+        $oldAdjustment->forceFill(['created_at' => $previousMonth, 'updated_at' => $previousMonth])->saveQuietly();
+
+        $this->actingAs($manager)->getJson(route('api.workspace'))
+            ->assertOk()
+            ->assertJsonPath('summary.month_sales', 900)
+            ->assertJsonPath('summary.month_liters', 15)
+            ->assertJsonPath('summary.month_transaction_count', 2)
+            ->assertJsonPath('summary.pending_deliveries', 1)
+            ->assertJsonPath('summary.pending_adjustments', 1);
+    }
+
+    public function test_sales_are_newest_first_when_sale_timestamps_match(): void
+    {
+        [$branch] = $this->branches();
+        $manager = User::factory()->create(['role' => UserRole::Owner, 'branch_id' => $branch->id]);
+        [, $nozzle, $product] = $this->stationEquipment($branch);
+        $soldAt = now()->startOfMinute();
+
+        foreach (['SALE-001', 'SALE-002'] as $receipt) {
+            FuelSale::create([
+                'branch_id' => $branch->id,
+                'fuel_nozzle_id' => $nozzle->id,
+                'fuel_product_id' => $product->id,
+                'receipt_number' => $receipt,
+                'liters' => 1,
+                'price_per_liter' => 60,
+                'total_amount' => 60,
+                'sold_at' => $soldAt,
+                'recorded_by' => $manager->id,
+            ]);
+        }
+
+        $this->actingAs($manager)->getJson(route('api.workspace'))
+            ->assertOk()
+            ->assertJsonPath('sales.0.receipt', 'SALE-002')
+            ->assertJsonPath('sales.1.receipt', 'SALE-001');
     }
 
     public function test_manager_can_register_a_tank_with_a_traceable_opening_balance(): void
@@ -684,12 +881,13 @@ class FuelOperationsTest extends TestCase
         ])->assertForbidden();
     }
 
-    public function test_manager_price_edit_appends_effective_price_history_and_is_branch_scoped(): void
+    public function test_manager_price_edit_syncs_all_branches_and_preserves_history(): void
     {
         [$manaoag, $sanFabian] = $this->branches();
         $manager = User::factory()->create(['role' => UserRole::Owner, 'branch_id' => $manaoag->id]);
         $otherManager = User::factory()->create(['role' => UserRole::Owner, 'branch_id' => $sanFabian->id]);
-        $product = FuelProduct::create(['name' => 'Unleaded 91']);
+        $product = $this->stationEquipment($manaoag)[2];
+        $this->stationEquipment($sanFabian);
         $price = FuelPrice::create([
             'branch_id' => $manaoag->id,
             'fuel_product_id' => $product->id,
@@ -709,17 +907,27 @@ class FuelOperationsTest extends TestCase
             'price_per_liter' => '90.25',
             'set_by' => $manager->id,
         ]);
+        $this->assertDatabaseHas('fuel_prices', [
+            'branch_id' => $sanFabian->id,
+            'fuel_product_id' => $product->id,
+            'price_per_liter' => '90.25',
+            'set_by' => $manager->id,
+        ]);
         $this->assertDatabaseHas('audit_logs', [
             'action' => 'fuel-price.updated',
             'subject_type' => FuelPrice::class,
         ]);
+        $this->actingAs($otherManager)->get(route('setup.index'))
+            ->assertOk()
+            ->assertSee('pricePerLiter', false)
+            ->assertSee('90.25', false);
 
         $this->actingAs($otherManager)->put(route('setup.prices.update', $price), [
             'price_per_liter' => '95.00',
         ])->assertNotFound();
     }
 
-    public function test_adding_price_at_an_existing_effective_time_succeeds_and_updates_the_selected_branch_system(): void
+    public function test_adding_price_at_an_existing_effective_time_syncs_all_branches(): void
     {
         [$branch, $otherBranch] = $this->branches();
         $manager = User::factory()->create(['role' => UserRole::Owner, 'branch_id' => $branch->id]);
@@ -747,7 +955,7 @@ class FuelOperationsTest extends TestCase
             'price_per_liter' => '70.50',
             'effective_from' => $effectiveFrom->format('Y-m-d\TH:i:s'),
         ])->assertRedirect()
-            ->assertSessionHas('success', 'Fuel price saved. The selected effective time was already in use, so this price starts at the next available second.');
+            ->assertSessionHas('success', 'Fuel price saved for all branches. The selected effective time was already in use, so this price starts at the next available second.');
 
         $newPrice = FuelPrice::query()
             ->where('branch_id', $branch->id)
@@ -758,6 +966,8 @@ class FuelOperationsTest extends TestCase
 
         $this->travelTo($effectiveFrom->copy()->addSeconds(3));
         $this->actingAs($manager)->getJson(route('api.workspace'))->assertOk()
+            ->assertJsonPath('prices.0.price_per_liter', 70.5);
+        $this->actingAs($otherManager)->getJson(route('api.workspace'))->assertOk()
             ->assertJsonPath('prices.0.price_per_liter', 70.5);
 
         app(InventoryLedger::class)->record($tank, 'opening_balance', 100, $manager, $tank, now()->subMinute());
@@ -780,6 +990,12 @@ class FuelOperationsTest extends TestCase
             'fuel_product_id' => $product->id,
             'price_per_liter' => '80.00',
         ]);
+        $this->assertDatabaseHas('fuel_prices', [
+            'branch_id' => $otherBranch->id,
+            'fuel_product_id' => $product->id,
+            'price_per_liter' => '70.50',
+            'effective_from' => $effectiveFrom->copy()->addSecond()->toDateTimeString(),
+        ]);
     }
 
     public function test_current_minute_price_updates_take_effect_immediately_and_keep_fuel_order_stable(): void
@@ -801,7 +1017,12 @@ class FuelOperationsTest extends TestCase
 
         $this->travelTo(now()->startOfMinute()->addSeconds(30));
         $effectiveFrom = now()->format('Y-m-d\TH:i');
-        foreach (['Unleaded' => '84.57', 'Premium' => '74.23'] as $name => $newPrice) {
+        $newPrices = [
+            'Unleaded' => '84.57',
+            'Premium' => '74.23',
+            'Diesel' => '79.16',
+        ];
+        foreach ($newPrices as $name => $newPrice) {
             $this->actingAs($manager)->post(route('setup.prices'), [
                 'fuel_product_id' => $products[$name]->id,
                 'price_per_liter' => $newPrice,
@@ -809,13 +1030,20 @@ class FuelOperationsTest extends TestCase
             ])->assertRedirect();
         }
 
-        $this->actingAs($manager)->getJson(route('api.workspace'))->assertOk()
-            ->assertJsonPath('prices.0.fuel', 'Unleaded')
-            ->assertJsonPath('prices.0.price_per_liter', 84.57)
-            ->assertJsonPath('prices.1.fuel', 'Premium')
-            ->assertJsonPath('prices.1.price_per_liter', 74.23)
-            ->assertJsonPath('prices.2.fuel', 'Diesel')
-            ->assertJsonPath('prices.2.price_per_liter', 60);
+        $workspace = $this->actingAs($manager)->getJson(route('api.workspace'))
+            ->assertOk()
+            ->json();
+        $this->assertCount(3, $workspace['prices']);
+        $this->assertCount(3, $workspace['price_history']);
+        foreach ($newPrices as $name => $newPrice) {
+            $currentPrice = collect($workspace['prices'])->firstWhere('fuel', $name);
+            $previousPrice = collect($workspace['price_history'])->firstWhere('fuel', $name);
+
+            $this->assertNotNull($currentPrice);
+            $this->assertNotNull($previousPrice);
+            $this->assertEquals((float) $newPrice, $currentPrice['price_per_liter']);
+            $this->assertEquals(60, $previousPrice['price_per_liter']);
+        }
     }
 
     public function test_sale_cannot_exceed_available_stock(): void
