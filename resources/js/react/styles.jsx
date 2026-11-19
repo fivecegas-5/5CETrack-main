@@ -435,6 +435,8 @@ td strong { color: #344255; font-weight: 700; }
 .dashboard-transactions-foot > span { display: inline-flex; align-items: center; gap: 6px; }
 .dashboard-transactions-foot .status-dot { width: 5px; height: 5px; }
 .dashboard-transaction-pagination, .dashboard-page-jump { display: flex; align-items: center; gap: 5px; }
+.dashboard-table-scroll-controls { display: inline-flex; align-items: center; gap: 5px; }
+.dashboard-table-scroll-controls > span { color: #84909d; font-size: 8px; }
 .dashboard-page-button { display: grid; width: 27px; height: 27px; place-items: center; padding: 0; border: 1px solid #e1e6ec; border-radius: 6px; color: #46566b; background: white; font-size: 14px; cursor: pointer; }
 .dashboard-page-button:hover:not(:disabled), .dashboard-page-jump-button:hover { border-color: #bd3b46; color: #a92c39; background: #fff7f7; }
 .dashboard-page-button:disabled { color: #b7c0ca; background: #f7f8fa; cursor: not-allowed; }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 const number = (value, fractionDigits = 0) => new Intl.NumberFormat('en-PH', {
@@ -12,6 +12,8 @@ function Dashboard({ root }) {
     const [transactionsPage, setTransactionsPage] = useState(1);
     const [transactionsPageInput, setTransactionsPageInput] = useState('1');
     const [transactionsPageError, setTransactionsPageError] = useState('');
+    const transactionsTableRef = useRef(null);
+    const [transactionScroll, setTransactionScroll] = useState({ left: false, right: false });
 
     useEffect(() => {
         let cancelled = false;
@@ -45,6 +47,29 @@ function Dashboard({ root }) {
             cancelled = true;
         };
     }, [root, transactionsPage]);
+
+    useEffect(() => {
+        const table = transactionsTableRef.current;
+
+        if (!table) return undefined;
+
+        const updateScrollButtons = () => {
+            const maxScrollLeft = table.scrollWidth - table.clientWidth;
+            setTransactionScroll({
+                left: table.scrollLeft > 1,
+                right: maxScrollLeft - table.scrollLeft > 1,
+            });
+        };
+
+        updateScrollButtons();
+        table.addEventListener('scroll', updateScrollButtons, { passive: true });
+        window.addEventListener('resize', updateScrollButtons);
+
+        return () => {
+            table.removeEventListener('scroll', updateScrollButtons);
+            window.removeEventListener('resize', updateScrollButtons);
+        };
+    }, [dashboard]);
 
     if (error) {
         return <div className="alert alert-error" role="alert">{error}</div>;
@@ -80,6 +105,17 @@ function Dashboard({ root }) {
 
         setTransactionsPageError('');
         setTransactionsPage(requestedPage);
+    };
+
+    const scrollTransactionsTable = (direction) => {
+        const table = transactionsTableRef.current;
+
+        if (table) {
+            table.scrollBy({
+                left: direction * Math.max(table.clientWidth * 0.75, 120),
+                behavior: 'smooth',
+            });
+        }
     };
 
     return (
@@ -173,7 +209,7 @@ function Dashboard({ root }) {
                     </div>
                     {transactions.length ? (
                         <>
-                            <div className="table-scroll dashboard-table-scroll">
+                            <div className="table-scroll dashboard-table-scroll" ref={transactionsTableRef}>
                                 <table className="dashboard-transactions-table">
                                     <thead><tr><th>DATE</th><th>TYPE</th><th>FUEL</th><th>LITERS</th><th>AMOUNT</th></tr></thead>
                                     <tbody>
@@ -196,6 +232,29 @@ function Dashboard({ root }) {
                                     <i className="status-dot" />
                                     Showing {firstTransaction}-{lastTransaction} of {transactionsPagination.total} movements
                                 </span>
+                                {(transactionScroll.left || transactionScroll.right) && (
+                                    <div className="dashboard-table-scroll-controls" aria-label="Scroll recent transactions">
+                                        <span>Scroll table</span>
+                                        <button
+                                            className="dashboard-page-button"
+                                            type="button"
+                                            aria-label="Scroll table left"
+                                            disabled={!transactionScroll.left}
+                                            onClick={() => scrollTransactionsTable(-1)}
+                                        >
+                                            ←
+                                        </button>
+                                        <button
+                                            className="dashboard-page-button"
+                                            type="button"
+                                            aria-label="Scroll table right"
+                                            disabled={!transactionScroll.right}
+                                            onClick={() => scrollTransactionsTable(1)}
+                                        >
+                                            →
+                                        </button>
+                                    </div>
+                                )}
                                 {transactionsPagination.last_page > 1 && (
                                     <div className="dashboard-transaction-pagination" aria-label="Recent transaction pagination">
                                         <button
