@@ -40,4 +40,4 @@ RUN mkdir -p bootstrap/cache \
 
 EXPOSE 10000
 
-CMD ["sh", "-c", "chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache && exec apache2-foreground"]
+CMD ["sh", "-c", "chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache && php artisan migrate --force && exec apache2-foreground"]
