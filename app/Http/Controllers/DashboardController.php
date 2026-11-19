@@ -14,6 +14,8 @@ use Illuminate\View\View;
 
 class DashboardController extends Controller
 {
+    private const TRANSACTIONS_PER_PAGE = 5;
+
     public function __invoke(Request $request): View|RedirectResponse
     {
         if (! $request->user()->isOwner()) {
@@ -59,6 +61,7 @@ class DashboardController extends Controller
                     'amount' => $transaction['amount'],
                 ];
             })->values(),
+            'transactions_pagination' => $dashboard['transactionsPagination'],
         ]);
     }
 
@@ -110,10 +113,17 @@ class DashboardController extends Controller
             })
             ->values();
 
-        $recentTransactions = InventoryMovement::visibleTo($user)
+        $transactionsQuery = InventoryMovement::visibleTo($user)
             ->with(['tank.fuelProduct', 'branch', 'recorder', 'source'])
             ->latest('occurred_at')
-            ->limit(8)
+            ->latest('id');
+        $requestedPage = filter_var($request->query('transactions_page', 1), FILTER_VALIDATE_INT);
+        $requestedPage = $requestedPage !== false && $requestedPage > 0 ? $requestedPage : 1;
+        $totalTransactions = $transactionsQuery->count();
+        $lastPage = max(1, (int) ceil($totalTransactions / self::TRANSACTIONS_PER_PAGE));
+        $currentPage = min($requestedPage, $lastPage);
+        $recentTransactions = $transactionsQuery
+            ->forPage($currentPage, self::TRANSACTIONS_PER_PAGE)
             ->get()
             ->map(function (InventoryMovement $movement): array {
                 $isStockIn = (float) $movement->signed_quantity_liters > 0;
@@ -142,6 +152,12 @@ class DashboardController extends Controller
             'inventoryByProduct' => $inventoryByProduct,
             'chartTanks' => $chartTanks,
             'recentTransactions' => $recentTransactions,
+            'transactionsPagination' => [
+                'current_page' => $currentPage,
+                'last_page' => $lastPage,
+                'per_page' => self::TRANSACTIONS_PER_PAGE,
+                'total' => $totalTransactions,
+            ],
         ];
     }
 }
