@@ -23,6 +23,19 @@ Use **Forgot password?** on the login screen to request a reset link by email. C
 
 If the owner email address is also forgotten, open the project in VS Code and run `php artisan app:recover-owner` in the integrated terminal. The command lists owner email addresses locally, lets you select the account, and prompts for a new password without echoing it. Do not share password-reset links or passwords.
 
+## Deploying on Render
+
+The repository includes a Dockerfile for deploying this Laravel application as a Render Web Service.
+
+1. In Render, choose **New > Web Service**, connect `fivecegas-5/5CETrack-main`, select the `main` branch, and choose the Docker runtime with the repository-root `Dockerfile`.
+2. Create or choose a production database. The container supports MySQL/MariaDB and PostgreSQL. To retain data from a local XAMPP database, export and import the database into a hosted MySQL-compatible service; the local XAMPP server is not reachable from Render. For Render PostgreSQL, set `DB_CONNECTION=pgsql` and `DB_URL` to the database's internal URL. This application reads `DB_URL` for connection URLs.
+3. Configure the service environment: `APP_ENV=production`, `APP_DEBUG=false`, `APP_KEY` (generate once with `php artisan key:generate --show`), `APP_URL` (the Render service URL), and the appropriate database settings. For MySQL/MariaDB, set `DB_CONNECTION=mysql`, `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, and `DB_PASSWORD`. Keep credentials in Render's environment settings, not in Git.
+4. The container runs pending migrations with `php artisan migrate --force` before Apache starts. Do not run `migrate:fresh`. Create the owner account and verify production branch, tank, stock, and fuel-price data; do not assume local data is present in the hosted database.
+5. Delivery invoices and credit-agreement uploads use Laravel's private local disk at `storage/app/private`. Attach a persistent disk at `/var/www/html/storage/app/private` before accepting uploads, or configure durable object storage instead. The container's local filesystem alone is not durable across deploys.
+6. Configure production mail credentials if password reset and email alerts should be delivered.
+
+The container listens on port `10000` and includes both MySQL and PostgreSQL PDO drivers. Render's Docker and database setup details are in the [Laravel deployment guide](https://render.com/docs/deploy-php-laravel-docker) and [PostgreSQL connection guide](https://render.com/docs/postgresql-creating-connecting).
+
 ## First station setup
 
 1. Run pending migrations with `php artisan migrate --force`.

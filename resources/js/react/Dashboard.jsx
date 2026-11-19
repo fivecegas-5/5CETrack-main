@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 const number = (value, fractionDigits = 0) => new Intl.NumberFormat('en-PH', {
@@ -9,11 +9,18 @@ const number = (value, fractionDigits = 0) => new Intl.NumberFormat('en-PH', {
 function Dashboard({ root }) {
     const [dashboard, setDashboard] = useState(null);
     const [error, setError] = useState('');
+    const [transactionsPage, setTransactionsPage] = useState(1);
+    const [transactionsPageInput, setTransactionsPageInput] = useState('1');
+    const [transactionsPageError, setTransactionsPageError] = useState('');
+    const transactionsTableRef = useRef(null);
+    const [transactionScroll, setTransactionScroll] = useState({ left: false, right: false });
 
     useEffect(() => {
         let cancelled = false;
+        const apiUrl = new URL(root.dataset.apiUrl, window.location.origin);
+        apiUrl.searchParams.set('transactions_page', String(transactionsPage));
 
-        fetch(root.dataset.apiUrl, {
+        fetch(apiUrl, {
             headers: { Accept: 'application/json' },
             credentials: 'same-origin',
         })
@@ -25,7 +32,12 @@ function Dashboard({ root }) {
                 return response.json();
             })
             .then((data) => {
-                if (!cancelled) setDashboard(data);
+                if (!cancelled) {
+                    setDashboard(data);
+                    setTransactionsPage(data.transactions_pagination.current_page);
+                    setTransactionsPageInput(String(data.transactions_pagination.current_page));
+                    setTransactionsPageError('');
+                }
             })
             .catch((requestError) => {
                 if (!cancelled) setError(requestError.message);
@@ -34,7 +46,30 @@ function Dashboard({ root }) {
         return () => {
             cancelled = true;
         };
-    }, [root]);
+    }, [root, transactionsPage]);
+
+    useEffect(() => {
+        const table = transactionsTableRef.current;
+
+        if (!table) return undefined;
+
+        const updateScrollButtons = () => {
+            const maxScrollLeft = table.scrollWidth - table.clientWidth;
+            setTransactionScroll({
+                left: table.scrollLeft > 1,
+                right: maxScrollLeft - table.scrollLeft > 1,
+            });
+        };
+
+        updateScrollButtons();
+        table.addEventListener('scroll', updateScrollButtons, { passive: true });
+        window.addEventListener('resize', updateScrollButtons);
+
+        return () => {
+            table.removeEventListener('scroll', updateScrollButtons);
+            window.removeEventListener('resize', updateScrollButtons);
+        };
+    }, [dashboard]);
 
     if (error) {
         return <div className="alert alert-error" role="alert">{error}</div>;
@@ -45,6 +80,43 @@ function Dashboard({ root }) {
     }
 
     const { inventory, recent_transactions: transactions, tanks, user } = dashboard;
+    const transactionsPagination = dashboard.transactions_pagination;
+    const firstTransaction = transactionsPagination.total === 0
+        ? 0
+        : ((transactionsPagination.current_page - 1) * transactionsPagination.per_page) + 1;
+    const lastTransaction = Math.min(
+        transactionsPagination.current_page * transactionsPagination.per_page,
+        transactionsPagination.total,
+    );
+
+    const jumpToTransactionsPage = (event) => {
+        event.preventDefault();
+        const requestedPage = Number(transactionsPageInput);
+
+        if (
+            !/^\d+$/.test(transactionsPageInput)
+            || !Number.isSafeInteger(requestedPage)
+            || requestedPage < 1
+            || requestedPage > transactionsPagination.last_page
+        ) {
+            setTransactionsPageError(`Enter a page from 1 to ${transactionsPagination.last_page}.`);
+            return;
+        }
+
+        setTransactionsPageError('');
+        setTransactionsPage(requestedPage);
+    };
+
+    const scrollTransactionsTable = (direction) => {
+        const table = transactionsTableRef.current;
+
+        if (table) {
+            table.scrollBy({
+                left: direction * Math.max(table.clientWidth * 0.75, 120),
+                behavior: 'smooth',
+            });
+        }
+    };
 
     return (
         <>
@@ -137,7 +209,7 @@ function Dashboard({ root }) {
                     </div>
                     {transactions.length ? (
                         <>
-                            <div className="table-scroll dashboard-table-scroll">
+                            <div className="table-scroll dashboard-table-scroll" ref={transactionsTableRef}>
                                 <table className="dashboard-transactions-table">
                                     <thead><tr><th>DATE</th><th>TYPE</th><th>FUEL</th><th>LITERS</th><th>AMOUNT</th></tr></thead>
                                     <tbody>
@@ -156,7 +228,79 @@ function Dashboard({ root }) {
                                 </table>
                             </div>
                             <div className="dashboard-transactions-foot">
-                                <span><i className="status-dot" /> {transactions.length} latest movements</span>
+                                <span>
+                                    <i className="status-dot" />
+                                    Showing {firstTransaction}-{lastTransaction} of {transactionsPagination.total} movements
+                                </span>
+                                {(transactionScroll.left || transactionScroll.right) && (
+                                    <div className="dashboard-table-scroll-controls" aria-label="Scroll recent transactions">
+                                        <span>Scroll table</span>
+                                        <button
+                                            className="dashboard-page-button"
+                                            type="button"
+                                            aria-label="Scroll table left"
+                                            disabled={!transactionScroll.left}
+                                            onClick={() => scrollTransactionsTable(-1)}
+                                        >
+                                            ←
+                                        </button>
+                                        <button
+                                            className="dashboard-page-button"
+                                            type="button"
+                                            aria-label="Scroll table right"
+                                            disabled={!transactionScroll.right}
+                                            onClick={() => scrollTransactionsTable(1)}
+                                        >
+                                            →
+                                        </button>
+                                    </div>
+                                )}
+                                {transactionsPagination.last_page > 1 && (
+                                    <div className="dashboard-transaction-pagination" aria-label="Recent transaction pagination">
+                                        <button
+                                            className="dashboard-page-button"
+                                            type="button"
+                                            aria-label="Previous page"
+                                            disabled={transactionsPagination.current_page <= 1}
+                                            onClick={() => setTransactionsPage((page) => page - 1)}
+                                        >
+                                            ←
+                                        </button>
+                                        <form className="dashboard-page-jump" onSubmit={jumpToTransactionsPage}>
+                                            <label htmlFor="dashboard-transactions-page">Page</label>
+                                            <input
+                                                id="dashboard-transactions-page"
+                                                type="text"
+                                                inputMode="numeric"
+                                                pattern="[0-9]*"
+                                                aria-label="Jump to page"
+                                                aria-invalid={Boolean(transactionsPageError)}
+                                                aria-describedby={transactionsPageError ? 'dashboard-transactions-page-error' : undefined}
+                                                value={transactionsPageInput}
+                                                onChange={(event) => {
+                                                    setTransactionsPageInput(event.target.value.replace(/\D/g, ''));
+                                                    setTransactionsPageError('');
+                                                }}
+                                            />
+                                            <span>of {transactionsPagination.last_page}</span>
+                                            <button className="dashboard-page-jump-button" type="submit">Go</button>
+                                            {transactionsPageError && (
+                                                <small id="dashboard-transactions-page-error" role="alert">
+                                                    {transactionsPageError}
+                                                </small>
+                                            )}
+                                        </form>
+                                        <button
+                                            className="dashboard-page-button"
+                                            type="button"
+                                            aria-label="Next page"
+                                            disabled={transactionsPagination.current_page >= transactionsPagination.last_page}
+                                            onClick={() => setTransactionsPage((page) => page + 1)}
+                                        >
+                                            →
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         </>
                     ) : (

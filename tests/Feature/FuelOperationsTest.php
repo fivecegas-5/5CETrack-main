@@ -638,6 +638,43 @@ class FuelOperationsTest extends TestCase
         );
     }
 
+    public function test_dashboard_recent_transactions_paginate_five_rows_and_clamp_the_requested_page(): void
+    {
+        [$branch] = $this->branches();
+        $owner = User::factory()->create(['role' => UserRole::Owner, 'branch_id' => $branch->id]);
+        [$tank] = $this->stationEquipment($branch);
+
+        for ($day = 0; $day < 7; $day++) {
+            $tank->inventoryMovements()->create([
+                'branch_id' => $branch->id,
+                'fuel_tank_id' => $tank->id,
+                'movement_type' => 'adjustment',
+                'signed_quantity_liters' => 10,
+                'recorded_by' => $owner->id,
+                'occurred_at' => now()->subDays($day),
+            ]);
+        }
+
+        $this->actingAs($owner)->getJson(route('api.dashboard', ['transactions_page' => 1]))
+            ->assertOk()
+            ->assertJsonCount(5, 'recent_transactions')
+            ->assertJsonPath('transactions_pagination.current_page', 1)
+            ->assertJsonPath('transactions_pagination.last_page', 2)
+            ->assertJsonPath('transactions_pagination.per_page', 5)
+            ->assertJsonPath('transactions_pagination.total', 7);
+
+        $this->getJson(route('api.dashboard', ['transactions_page' => 2]))
+            ->assertOk()
+            ->assertJsonCount(2, 'recent_transactions')
+            ->assertJsonPath('transactions_pagination.current_page', 2)
+            ->assertJsonPath('recent_transactions.0.date', now()->subDays(5)->format('M j'));
+
+        $this->getJson(route('api.dashboard', ['transactions_page' => 99]))
+            ->assertOk()
+            ->assertJsonCount(2, 'recent_transactions')
+            ->assertJsonPath('transactions_pagination.current_page', 2);
+    }
+
     public function test_dashboard_shows_only_the_owner_assigned_branch(): void
     {
         [$manaoag, $sanFabian] = $this->branches();
