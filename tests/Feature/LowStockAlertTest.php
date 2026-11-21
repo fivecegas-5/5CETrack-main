@@ -17,12 +17,14 @@ class LowStockAlertTest extends TestCase
 {
     use DatabaseMigrations;
 
-    public function test_threshold_crossing_notifies_owners_and_staff_across_branches_and_supports_read_state(): void
+    public function test_threshold_crossing_notifies_global_owners_and_users_at_the_affected_branch(): void
     {
         Mail::fake();
         $manaoag = Branch::create(['code' => 'manaoag', 'name' => 'Manaoag']);
         $sanFabian = Branch::create(['code' => 'san-fabian', 'name' => 'San Fabian']);
         $owner = User::factory()->create(['role' => UserRole::Owner, 'branch_id' => null]);
+        $manaoagOwner = User::factory()->create(['role' => UserRole::Owner, 'branch_id' => $manaoag->id]);
+        $sanFabianOwner = User::factory()->create(['role' => UserRole::Owner, 'branch_id' => $sanFabian->id]);
         $manaoagStaff = User::factory()->create(['role' => UserRole::Staff, 'branch_id' => $manaoag->id]);
         $sanFabianStaff = User::factory()->create(['role' => UserRole::Staff, 'branch_id' => $sanFabian->id]);
         $product = FuelProduct::create(['name' => 'Unleaded 91']);
@@ -52,14 +54,11 @@ class LowStockAlertTest extends TestCase
         );
 
         $this->assertDatabaseCount('notifications', 3);
-        $this->assertSame(
-            1,
-            $owner->notifications()->where('data->branch_id', $manaoag->id)->count(),
-        );
-        $this->assertSame(
-            1,
-            $sanFabianStaff->notifications()->where('data->branch_id', $manaoag->id)->count(),
-        );
+        $this->assertSame(1, $owner->notifications()->where('data->branch_id', $manaoag->id)->count());
+        $this->assertSame(1, $manaoagOwner->notifications()->where('data->branch_id', $manaoag->id)->count());
+        $this->assertSame(1, $manaoagStaff->notifications()->where('data->branch_id', $manaoag->id)->count());
+        $this->assertSame(0, $sanFabianOwner->notifications()->count());
+        $this->assertSame(0, $sanFabianStaff->notifications()->count());
         $this->assertSame(
             ['database', 'mail'],
             (new LowStockThresholdReached(['fuel' => 'Unleaded 91']))->via($owner),
@@ -75,12 +74,18 @@ class LowStockAlertTest extends TestCase
         );
         $this->assertDatabaseCount('notifications', 3);
 
-        $remoteNotification = $owner->notifications()
-            ->where('data->branch_id', $sanFabian->id)
-            ->first();
-        $this->assertNull($remoteNotification);
-
         $notification = $owner->notifications()->firstOrFail();
+        $this->actingAs($sanFabianOwner)->post(route('notifications.inventory', $notification->id))
+            ->assertNotFound();
+        $this->actingAs($owner)
+            ->withSession(['active_branch_id' => $sanFabian->id])
+            ->post(route('notifications.inventory', $notification->id))
+            ->assertRedirect(route('inventory.index', ['highlight_tank' => $tank->id]))
+            ->assertSessionHas('active_branch_id', $manaoag->id);
+        $this->getJson(route('api.workspace'))
+            ->assertOk()
+            ->assertJsonPath('active_branch_id', $manaoag->id);
+
         $this->actingAs($owner)->getJson(route('api.notifications.index'))
             ->assertOk()
             ->assertJsonPath('unread_count', 1)
@@ -91,6 +96,9 @@ class LowStockAlertTest extends TestCase
         $this->assertNotNull($notification->fresh()->read_at);
 
         $this->actingAs($sanFabianStaff)->getJson(route('api.notifications.index'))
+            ->assertOk()
+            ->assertJsonPath('unread_count', 0);
+        $this->actingAs($manaoagStaff)->getJson(route('api.notifications.index'))
             ->assertOk()
             ->assertJsonPath('unread_count', 1);
         $this->patchJson(route('api.notifications.read-all'))

@@ -15,6 +15,11 @@ const fuelOrder = (name) => {
     return 3;
 };
 const compareFuelNames = (left, right) => fuelOrder(left) - fuelOrder(right) || left.localeCompare(right);
+const dashboardRecentItemsPerPage = 5;
+const salesRecentItemsPerPage = 7;
+const adjustmentHistoryItemsPerPage = 5;
+const isLocalDashboard = () => typeof window !== 'undefined'
+    && ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
 const localDateTime = (offsetMinutes = 0) => {
     const now = new Date();
     return new Date(now.getTime() + offsetMinutes * 60000 - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
@@ -24,9 +29,9 @@ function ActionButton({ children, className = '', ...props }) {
     return <button className={`primary-gradient inline-flex min-h-9 items-center justify-center rounded-xl px-3 py-2 text-xs font-bold text-white shadow-sm transition disabled:opacity-60 ${className}`} {...props}>{children}</button>;
 }
 
-function Panel({ title, children, subtitle, action, allowOverflow = false }) {
+function Panel({ title, children, subtitle, action, allowOverflow = false, pinFooter = false }) {
     return (
-        <section className={`min-w-0 ${allowOverflow ? 'overflow-visible' : 'overflow-hidden'} rounded-2xl border border-slate-200 bg-white shadow-sm`}>
+        <section className={`min-w-0 ${pinFooter ? 'flex flex-col' : ''} ${allowOverflow ? 'overflow-visible' : 'overflow-hidden'} rounded-2xl border border-slate-200 bg-white shadow-sm`}>
             <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
                 <div><h2 className="font-bold text-slate-900">{title}</h2>{subtitle && <p className="mt-1 text-xs text-slate-500">{subtitle}</p>}</div>
                 {action}
@@ -86,7 +91,7 @@ function EditModal({ title, onClose, children }) {
 
 function Table({ headers, children }) {
     return (
-        <div className="min-w-0 max-w-full overflow-x-auto">
+        <div className="min-w-0 max-w-full flex-1 overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-sm">
                 <thead className="bg-slate-50 text-[11px] font-extrabold uppercase tracking-wider text-slate-500"><tr>{headers.map((header) => <th className={`px-4 py-3 ${header === 'Trend' ? 'w-20 text-center' : ''}`} key={header}>{header}</th>)}</tr></thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">{children}</tbody>
@@ -122,8 +127,12 @@ function PriceChangeIndicator({ change }) {
     );
 }
 
-function PageNavigation({ pagination, parameter, editablePage = false }) {
-    if (!pagination || pagination.last_page < 2) return null;
+function PageNavigation({ pagination, parameter, editablePage = false, showSinglePage = false, summary }) {
+    if (!pagination || (pagination.last_page < 2 && (!showSinglePage || pagination.total === 0))) return null;
+    const firstRecord = pagination.total
+        ? (pagination.current_page - 1) * pagination.per_page + 1
+        : 0;
+    const lastRecord = Math.min(pagination.current_page * pagination.per_page, pagination.total);
     const pageUrl = (page) => {
         const url = new URL(window.location.href);
         if (page <= 1) url.searchParams.delete(parameter);
@@ -139,8 +148,10 @@ function PageNavigation({ pagination, parameter, editablePage = false }) {
     };
 
     return (
-        <nav aria-label="Pagination" className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3 text-xs">
-            <span className="text-slate-500">Page {pagination.current_page} of {pagination.last_page} · {pagination.total} records</span>
+        <nav aria-label="Pagination" className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3 text-xs">
+            <span className="text-slate-500">{summary || (editablePage
+                ? `Showing ${firstRecord}–${lastRecord} of ${pagination.total}`
+                : `Page ${pagination.current_page} of ${pagination.last_page} · ${pagination.total} records`)}</span>
             {editablePage ? (
                 <div className="flex items-center gap-2">
                     <button aria-label="Previous page" className="grid size-9 place-items-center rounded-lg border border-slate-200 text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40" disabled={pagination.current_page <= 1} onClick={() => window.location.assign(pageUrl(pagination.current_page - 1))} title="Previous page" type="button">
@@ -187,7 +198,7 @@ function BranchField({ root, data }) {
     );
 }
 
-function SalesTable({ sales }) {
+function SalesTable({ sales, emptyMessage = 'No sales recorded in this database yet.' }) {
     const [editingSaleId, setEditingSaleId] = useState(null);
     const editingSale = sales.find((sale) => sale.id === editingSaleId);
     return (
@@ -210,7 +221,7 @@ function SalesTable({ sales }) {
                         </td>
                     </tr>
                 ))}
-                {!sales.length && <tr><td className="px-4 py-8 text-center text-slate-500" colSpan="9">No sales recorded in this database yet.</td></tr>}
+                {!sales.length && <tr><td className="px-4 py-8 text-center text-slate-500" colSpan="9">{emptyMessage}</td></tr>}
             </Table>
             {editingSale && <EditModal onClose={() => setEditingSaleId(null)} title={`Edit sale · ${editingSale.receipt || `Sale #${editingSale.id}`}`}>
                 <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(15rem,.45fr)]">
@@ -232,7 +243,25 @@ function SalesTable({ sales }) {
 }
 
 function Dashboard({ data, userName }) {
+    const [recentPage, setRecentPage] = useState(1);
+    const [recentPageInput, setRecentPageInput] = useState('1');
     const summary = data.summary;
+    const localPaginationEnabled = isLocalDashboard();
+    const pageCount = Math.max(1, Math.ceil(data.sales.length / dashboardRecentItemsPerPage));
+    const activePage = Math.min(recentPage, pageCount);
+    const firstVisibleSale = data.sales.length ? (activePage - 1) * dashboardRecentItemsPerPage + 1 : 0;
+    const lastVisibleSale = Math.min(activePage * dashboardRecentItemsPerPage, data.sales.length);
+    const recentSales = localPaginationEnabled
+        ? data.sales.slice((activePage - 1) * dashboardRecentItemsPerPage, activePage * dashboardRecentItemsPerPage)
+        : data.sales.slice(0, 6);
+
+    useEffect(() => {
+        if (recentPage > pageCount) {
+            setRecentPage(pageCount);
+            setRecentPageInput(String(pageCount));
+        }
+    }, [pageCount, recentPage]);
+
     const fuelSummary = data.inventory.reduce((products, tank) => {
         const current = products.get(tank.fuel) || {
             fuel: tank.fuel,
@@ -253,6 +282,11 @@ function Dashboard({ data, userName }) {
         { icon: 'text-rose-700', soft: 'bg-rose-50', label: 'text-rose-800' },
         { icon: 'text-amber-600', soft: 'bg-amber-50', label: 'text-amber-800' },
     ][index % 3];
+
+    const changeRecentPage = (page) => {
+        setRecentPage(page);
+        setRecentPageInput(String(page));
+    };
 
     return (
         <div className="grid min-w-0 gap-5">
@@ -308,9 +342,9 @@ function Dashboard({ data, userName }) {
                         <span className="flex items-center gap-2"><i className="size-2.5 rounded-sm bg-slate-300" />Low-stock threshold</span>
                     </div>
                 </Panel>
-                <Panel title="Recent transactions" subtitle="Latest recorded sales">
+                <Panel pinFooter title="Recent transactions" subtitle="Latest recorded sales">
                     <Table headers={['Date', 'Fuel', 'Branch', 'Liters', 'Amount']}>
-                        {data.sales.slice(0, 6).map((sale) => (
+                        {recentSales.map((sale) => (
                             <tr key={sale.id}>
                                 <td className="whitespace-nowrap px-4 py-3 text-xs">{dateTime(sale.sold_at)}</td>
                                 <td className="px-4 py-3 font-semibold">{sale.fuel}</td>
@@ -321,6 +355,57 @@ function Dashboard({ data, userName }) {
                         ))}
                         {!data.sales.length && <tr><td className="px-4 py-8 text-center text-slate-500" colSpan="5">No sales recorded in this branch yet.</td></tr>}
                     </Table>
+                    {localPaginationEnabled && data.sales.length > 0 && (
+                        <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+                            <span>Showing {firstVisibleSale}–{lastVisibleSale} of {data.sales.length}</span>
+                            <nav aria-label="Recent transactions pagination" className="flex items-center gap-2 font-semibold">
+                                <span>Page</span>
+                                <button
+                                    aria-label="Previous page"
+                                    className="grid size-8 place-items-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                    disabled={activePage <= 1}
+                                    onClick={() => changeRecentPage(activePage - 1)}
+                                    type="button"
+                                >
+                                    <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg>
+                                </button>
+                                <input
+                                    aria-label="Recent transactions page number"
+                                    className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-center text-sm text-slate-800 outline-none focus:border-rose-400 focus:ring-2 focus:ring-rose-100"
+                                    inputMode="numeric"
+                                    maxLength={String(pageCount).length}
+                                    onBlur={() => setRecentPageInput(String(recentPage))}
+                                    onChange={(event) => {
+                                        const { value } = event.currentTarget;
+                                        if (!/^\d*$/.test(value)) return;
+                                        if (!value) {
+                                            setRecentPageInput('');
+                                            setRecentPage(1);
+                                            return;
+                                        }
+                                        const requestedPage = Number(value);
+                                        if (!Number.isSafeInteger(requestedPage)) return;
+                                        const page = Math.min(pageCount, Math.max(1, requestedPage));
+                                        setRecentPage(page);
+                                        setRecentPageInput(String(page));
+                                    }}
+                                    pattern="[0-9]*"
+                                    type="text"
+                                    value={recentPageInput}
+                                />
+                                <button
+                                    aria-label="Next page"
+                                    className="grid size-8 place-items-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                    disabled={activePage >= pageCount}
+                                    onClick={() => changeRecentPage(activePage + 1)}
+                                    type="button"
+                                >
+                                    <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
+                                </button>
+                                <span>of {pageCount}</span>
+                            </nav>
+                        </div>
+                    )}
                 </Panel>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -337,6 +422,8 @@ function Dashboard({ data, userName }) {
 
 function Inventory({ data }) {
     const branchName = data.branches.find((branch) => branch.id === data.active_branch_id)?.name;
+    const highlightedTankId = new URLSearchParams(window.location.search).get('highlight_tank');
+    const highlightedTank = data.inventory.find((tank) => String(tank.id) === highlightedTankId);
     const fuelSummary = data.inventory.reduce((groups, tank) => {
         const group = groups.get(tank.fuel) || {
             fuel: tank.fuel,
@@ -367,6 +454,11 @@ function Inventory({ data }) {
                 <div><h1 className="text-3xl font-extrabold text-slate-900">Fuel inventory</h1><p className="mt-1 text-sm text-slate-500">Monitor current fuel stock{branchName ? ` at ${branchName}` : ''}.</p></div>
                 <a className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 transition hover:bg-slate-50" href="/setup">Manage tanks</a>
             </div>
+            {highlightedTank && <section aria-labelledby="notification-tank-title" className="mb-5 rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4">
+                <p className="text-[11px] font-extrabold uppercase tracking-widest text-rose-700">Low-stock notification</p>
+                <h2 className="mt-1 font-bold text-slate-900" id="notification-tank-title">{highlightedTank.branch} · {highlightedTank.code} · {highlightedTank.fuel}</h2>
+                <p className="mt-1 text-sm text-slate-600">Current stock: {liters(highlightedTank.stock_liters)} · Alert threshold: {highlightedTank.low_stock_threshold_liters === null ? 'Not set' : liters(highlightedTank.low_stock_threshold_liters)}</p>
+            </section>}
             <div className="mb-5 grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {fuels.map((fuel, index) => {
                     const tone = tones[index % tones.length];
@@ -427,7 +519,14 @@ function Inventory({ data }) {
 
 function Transactions({ data, isOwner }) {
     const [query, setQuery] = useState('');
-    const filtered = useMemo(() => data.sales.filter((sale) => `${sale.receipt} ${sale.fuel} ${sale.branch} ${sale.pump} ${sale.nozzle} ${sale.recorder}`.toLowerCase().includes(query.toLowerCase())), [data.sales, query]);
+    const filtered = useMemo(() => data.sales.filter((sale) => `${sale.receipt || `Sale #${sale.id}`} ${sale.fuel} ${sale.branch} ${sale.pump} ${sale.nozzle} ${sale.recorder}`.toLowerCase().includes(query.toLowerCase())), [data.sales, query]);
+    const hasSearchQuery = query.trim().length > 0;
+    const resultCount = hasSearchQuery
+        ? `${filtered.length} matching ${filtered.length === 1 ? 'sale' : 'sales'} on this page`
+        : `${filtered.length} records on this page`;
+    const paginationSummary = hasSearchQuery
+        ? `${filtered.length} matching ${filtered.length === 1 ? 'sale' : 'sales'} on this page · ${data.pagination.sales.total} total records`
+        : undefined;
     const mySalesOnly = new URLSearchParams(window.location.search).get('my_sales') === '1';
     const salesFilterUrl = () => {
         const url = new URL(window.location.href);
@@ -439,15 +538,39 @@ function Transactions({ data, isOwner }) {
     return (
         <>
             <div className="mb-6"><p className="text-[11px] font-extrabold uppercase tracking-widest text-rose-700">Activity ledger</p><h1 className="text-3xl font-extrabold text-slate-900">Transactions</h1><p className="mt-1 text-sm text-slate-500">Imported transactions are marked read-only and cannot be changed or voided.</p></div>
-            <Panel allowOverflow title="Sales activity" subtitle={`${filtered.length} records on this page · ${data.pagination.sales.total} total`} action={<div className="flex flex-wrap items-center gap-3"><Input aria-label="Search sales on this page" onChange={(event) => setQuery(event.target.value)} placeholder="Search this page…" value={query} />{!isOwner && <a className="whitespace-nowrap text-xs font-bold text-rose-700 hover:text-rose-900" href={salesFilterUrl()}>{mySalesOnly ? 'Show all branch sales' : 'My sales'}</a>}</div>}>
-                <SalesTable sales={filtered} />
-                <PageNavigation editablePage pagination={data.pagination.sales} parameter="sales_page" />
+            <Panel allowOverflow pinFooter title="Sales activity" subtitle={`${resultCount} · ${data.pagination.sales.total} total`} action={<div className="flex flex-wrap items-center gap-3"><Input aria-label="Search sales on this page" onChange={(event) => setQuery(event.target.value)} placeholder="Search this page…" value={query} />{!isOwner && <a className="whitespace-nowrap text-xs font-bold text-rose-700 hover:text-rose-900" href={salesFilterUrl()}>{mySalesOnly ? 'Show all branch sales' : 'My sales'}</a>}</div>}>
+                <SalesTable sales={filtered} emptyMessage={hasSearchQuery ? 'No sales match your search on this page.' : undefined} />
+                <PageNavigation editablePage pagination={data.pagination.sales} parameter="sales_page" showSinglePage={isLocalDashboard()} summary={paginationSummary} />
             </Panel>
         </>
     );
 }
 
 function Sales({ data, root }) {
+    const [recentSalesPage, setRecentSalesPage] = useState(1);
+    const [recentSalesPageInput, setRecentSalesPageInput] = useState('1');
+    const localPaginationEnabled = isLocalDashboard();
+    const allRecentSales = data.sales.slice(0, 15);
+    const recentSalesPageCount = Math.max(1, Math.ceil(allRecentSales.length / salesRecentItemsPerPage));
+    const activeRecentSalesPage = Math.min(recentSalesPage, recentSalesPageCount);
+    const firstVisibleSale = allRecentSales.length ? (activeRecentSalesPage - 1) * salesRecentItemsPerPage + 1 : 0;
+    const lastVisibleSale = Math.min(activeRecentSalesPage * salesRecentItemsPerPage, allRecentSales.length);
+    const recentSales = localPaginationEnabled
+        ? allRecentSales.slice((activeRecentSalesPage - 1) * salesRecentItemsPerPage, activeRecentSalesPage * salesRecentItemsPerPage)
+        : allRecentSales;
+
+    useEffect(() => {
+        if (recentSalesPage > recentSalesPageCount) {
+            setRecentSalesPage(recentSalesPageCount);
+            setRecentSalesPageInput(String(recentSalesPageCount));
+        }
+    }, [recentSalesPage, recentSalesPageCount]);
+
+    const changeRecentSalesPage = (page) => {
+        setRecentSalesPage(page);
+        setRecentSalesPageInput(String(page));
+    };
+
     const activeNozzles = data.pumps.flatMap((pump) => pump.nozzles
         .filter((nozzle) => pump.is_active && nozzle.is_active)
         .map((nozzle) => ({ ...nozzle, branch_id: pump.branch_id, branch: pump.branch, pump: pump.label || pump.code })));
@@ -469,8 +592,61 @@ function Sales({ data, root }) {
                         <ActionButton className="min-h-11 text-sm" type="submit">Record sale</ActionButton>
                     </Form>
                 </Panel>
-                <Panel allowOverflow title="Recent sales" subtitle="Database records · imported sales are immutable">
-                    <SalesTable sales={data.sales.slice(0, 15)} />
+                <Panel allowOverflow pinFooter title="Recent sales" subtitle="Database records · imported sales are immutable">
+                    <SalesTable sales={recentSales} />
+                    {localPaginationEnabled && allRecentSales.length > 0 && (
+                        <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+                            <span>Showing {firstVisibleSale}–{lastVisibleSale} of {allRecentSales.length}</span>
+                            <nav aria-label="Recent sales pagination" className="flex items-center gap-2 font-semibold">
+                                <span>Page</span>
+                                <button
+                                    aria-label="Previous recent sales page"
+                                    className="grid size-8 place-items-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                    disabled={activeRecentSalesPage <= 1}
+                                    onClick={() => changeRecentSalesPage(activeRecentSalesPage - 1)}
+                                    title="Previous page"
+                                    type="button"
+                                >
+                                    <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg>
+                                </button>
+                                <input
+                                    aria-label="Recent sales page number"
+                                    className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-center text-sm text-slate-800 outline-none focus:border-rose-400 focus:ring-2 focus:ring-rose-100"
+                                    inputMode="numeric"
+                                    maxLength={String(recentSalesPageCount).length}
+                                    onBlur={() => setRecentSalesPageInput(String(recentSalesPage))}
+                                    onChange={(event) => {
+                                        const { value } = event.currentTarget;
+                                        if (!/^\d*$/.test(value)) return;
+                                        if (!value) {
+                                            setRecentSalesPageInput('');
+                                            setRecentSalesPage(1);
+                                            return;
+                                        }
+                                        const requestedPage = Number(value);
+                                        if (!Number.isSafeInteger(requestedPage)) return;
+                                        const page = Math.min(recentSalesPageCount, Math.max(1, requestedPage));
+                                        setRecentSalesPage(page);
+                                        setRecentSalesPageInput(String(page));
+                                    }}
+                                    pattern="[0-9]*"
+                                    type="text"
+                                    value={recentSalesPageInput}
+                                />
+                                <button
+                                    aria-label="Next recent sales page"
+                                    className="grid size-8 place-items-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                    disabled={activeRecentSalesPage >= recentSalesPageCount}
+                                    onClick={() => changeRecentSalesPage(activeRecentSalesPage + 1)}
+                                    title="Next page"
+                                    type="button"
+                                >
+                                    <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
+                                </button>
+                                <span>of {recentSalesPageCount}</span>
+                            </nav>
+                        </div>
+                    )}
                     <PageNavigation pagination={data.pagination.sales} parameter="sales_page" />
                 </Panel>
             </div>
@@ -497,7 +673,7 @@ function Deliveries({ data, root }) {
                         <ActionButton className="min-h-11 text-sm" type="submit">Submit delivery</ActionButton>
                     </Form>
                 </Panel>
-                <Panel title="Delivery records" subtitle={`${data.deliveries.length} latest records`}>
+                <Panel pinFooter title="Delivery records" subtitle={`${data.deliveries.length} latest records`}>
                     <Table headers={['Branch · Tank', 'Supplier / reference', 'Received', 'Liters', 'Cost', 'Status', 'Actions']}>
                         {data.deliveries.map((delivery) => (
                             <React.Fragment key={delivery.id}>
@@ -543,8 +719,36 @@ function Deliveries({ data, root }) {
 
 function Adjustments({ data, root }) {
     const [adjustmentDialog, setAdjustmentDialog] = useState(null);
+    const [historyPage, setHistoryPage] = useState(1);
+    const [historyPageInput, setHistoryPageInput] = useState('1');
+    const localPaginationEnabled = isLocalDashboard();
+    const historyPageCount = Math.max(1, Math.ceil(data.adjustments.length / adjustmentHistoryItemsPerPage));
+    const activeHistoryPage = Math.min(historyPage, historyPageCount);
+    const firstVisibleAdjustment = data.adjustments.length
+        ? (activeHistoryPage - 1) * adjustmentHistoryItemsPerPage + 1
+        : 0;
+    const lastVisibleAdjustment = Math.min(activeHistoryPage * adjustmentHistoryItemsPerPage, data.adjustments.length);
+    const visibleAdjustments = localPaginationEnabled
+        ? data.adjustments.slice(
+            (activeHistoryPage - 1) * adjustmentHistoryItemsPerPage,
+            activeHistoryPage * adjustmentHistoryItemsPerPage,
+        )
+        : data.adjustments;
     const activeAdjustment = data.adjustments.find((adjustment) => adjustment.id === adjustmentDialog?.id);
     const tanks = data.inventory.filter((tank) => tank.is_active && (!root.dataset.activeBranchId || String(tank.branch_id) === root.dataset.activeBranchId));
+
+    useEffect(() => {
+        if (historyPage > historyPageCount) {
+            setHistoryPage(historyPageCount);
+            setHistoryPageInput(String(historyPageCount));
+        }
+    }, [historyPage, historyPageCount]);
+
+    const changeHistoryPage = (page) => {
+        setHistoryPage(page);
+        setHistoryPageInput(String(page));
+    };
+
     return (
         <>
             <div className="mb-6"><p className="text-[11px] font-extrabold uppercase tracking-widest text-rose-700">Variance control</p><h1 className="text-3xl font-extrabold text-slate-900">Stock adjustments</h1><p className="mt-1 text-sm text-slate-500">All posted stock changes remain auditable.</p></div>
@@ -558,9 +762,9 @@ function Adjustments({ data, root }) {
                         <ActionButton className="min-h-11 text-sm" type="submit">Submit for review</ActionButton>
                     </Form>
                 </Panel>
-                <Panel allowOverflow title="Adjustment history" subtitle={`${data.adjustments.length} latest records`}>
+                <Panel allowOverflow pinFooter title="Adjustment history" subtitle={`${data.adjustments.length} latest records`}>
                     <Table headers={['Branch · Tank', 'Change', 'Reason', 'Requested by', 'Status', 'Actions']}>
-                        {data.adjustments.map((adjustment) => <tr key={adjustment.id}>
+                        {visibleAdjustments.map((adjustment) => <tr key={adjustment.id}>
                             <td className="px-4 py-3">{adjustment.branch} · {adjustment.tank} ({adjustment.fuel})</td>
                             <td className="px-4 py-3">{liters(adjustment.quantity_change_liters)}</td>
                             <td className="px-4 py-3">{adjustment.reason}</td>
@@ -579,7 +783,60 @@ function Adjustments({ data, root }) {
                         </tr>)}
                         {!data.adjustments.length && <tr><td className="px-4 py-8 text-center text-slate-500" colSpan="6">No adjustments recorded.</td></tr>}
                     </Table>
-                    <PageNavigation pagination={data.pagination.adjustments} parameter="adjustments_page" />
+                    {localPaginationEnabled && data.adjustments.length > 0 && (
+                        <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+                            <span>Showing {firstVisibleAdjustment}–{lastVisibleAdjustment} of {data.adjustments.length}</span>
+                            <nav aria-label="Adjustment history pagination" className="flex items-center gap-2 font-semibold">
+                                <span>Page</span>
+                                <button
+                                    aria-label="Previous adjustment history page"
+                                    className="grid size-8 place-items-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                    disabled={activeHistoryPage <= 1}
+                                    onClick={() => changeHistoryPage(activeHistoryPage - 1)}
+                                    title="Previous page"
+                                    type="button"
+                                >
+                                    <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg>
+                                </button>
+                                <input
+                                    aria-label="Adjustment history page number"
+                                    className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-center text-sm text-slate-800 outline-none focus:border-rose-400 focus:ring-2 focus:ring-rose-100"
+                                    inputMode="numeric"
+                                    maxLength={String(historyPageCount).length}
+                                    onBlur={() => setHistoryPageInput(String(historyPage))}
+                                    onChange={(event) => {
+                                        const { value } = event.currentTarget;
+                                        if (!/^\d*$/.test(value)) return;
+                                        if (!value) {
+                                            setHistoryPageInput('');
+                                            setHistoryPage(1);
+                                            return;
+                                        }
+                                        const requestedPage = Number(value);
+                                        if (!Number.isSafeInteger(requestedPage)) return;
+                                        const page = Math.min(historyPageCount, Math.max(1, requestedPage));
+                                        setHistoryPage(page);
+                                        setHistoryPageInput(String(page));
+                                    }}
+                                    pattern="[0-9]*"
+                                    type="text"
+                                    value={historyPageInput}
+                                />
+                                <button
+                                    aria-label="Next adjustment history page"
+                                    className="grid size-8 place-items-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                    disabled={activeHistoryPage >= historyPageCount}
+                                    onClick={() => changeHistoryPage(activeHistoryPage + 1)}
+                                    title="Next page"
+                                    type="button"
+                                >
+                                    <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
+                                </button>
+                                <span>of {historyPageCount}</span>
+                            </nav>
+                        </div>
+                    )}
+                    {!localPaginationEnabled && <PageNavigation pagination={data.pagination.adjustments} parameter="adjustments_page" />}
                 </Panel>
             </div>
             {activeAdjustment && adjustmentDialog?.action === 'edit' && activeAdjustment.can_edit && <EditModal onClose={() => setAdjustmentDialog(null)} title={`Edit adjustment · ${activeAdjustment.tank}`}>
@@ -661,7 +918,7 @@ function Prices({ data, root }) {
                             {!branchPrices.length && <tr><td className="px-4 py-8 text-center text-slate-500" colSpan="5">No current prices for this branch.</td></tr>}
                         </Table>
                     </Panel>
-                    <Panel allowOverflow title="Price history" subtitle="Previous and scheduled prices, newest entered first">
+                    <Panel allowOverflow pinFooter title="Price history" subtitle="Previous and scheduled prices, newest entered first">
                         <Table headers={['Fuel', 'Price per liter', 'Effective from', 'Set by', 'Trend']}>
                             {visiblePriceHistory.map((price) => <tr key={price.id}>
                                 <td className="px-4 py-3 font-semibold">{price.fuel}</td>
@@ -672,7 +929,7 @@ function Prices({ data, root }) {
                             </tr>)}
                             {!priceHistory.length && <tr><td className="px-4 py-8 text-center text-slate-500" colSpan="5">No previous or scheduled prices for this branch.</td></tr>}
                         </Table>
-                        {priceHistory.length > historyPageSize && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+                        {priceHistory.length > historyPageSize && <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
                             <span>Showing {(historyPage - 1) * historyPageSize + 1}–{Math.min(historyPage * historyPageSize, priceHistory.length)} of {priceHistory.length}</span>
                             <div className="flex items-center gap-2 font-semibold">
                                 <span>Page</span>

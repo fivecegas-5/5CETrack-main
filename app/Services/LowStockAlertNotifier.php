@@ -27,11 +27,13 @@ class LowStockAlertNotifier
 
         $recipients = User::query()
             ->where('is_active', true)
-            ->where(function ($query): void {
+            ->where(function ($query) use ($tank): void {
                 $query->where(function ($owner): void {
                     $owner->where('role', UserRole::Owner->value)->whereNull('branch_id');
-                })->orWhere(function ($staff): void {
-                    $staff->where('role', UserRole::Staff->value)->whereNotNull('branch_id');
+                })->orWhere(function ($branchUser) use ($tank): void {
+                    $branchUser
+                        ->whereIn('role', [UserRole::Owner->value, UserRole::Staff->value])
+                        ->where('branch_id', $tank->branch_id);
                 });
             })
             ->get();

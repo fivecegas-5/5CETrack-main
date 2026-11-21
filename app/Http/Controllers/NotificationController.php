@@ -2,7 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Branch;
+use App\Models\FuelTank;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 
 class NotificationController extends Controller
@@ -52,5 +55,33 @@ class NotificationController extends Controller
             'marked_read' => $markedRead,
             'unread_count' => 0,
         ]);
+    }
+
+    public function viewInventory(Request $request, string $notification): RedirectResponse
+    {
+        $record = $request->user()->notifications()->whereKey($notification)->firstOrFail();
+        $details = $record->data;
+        abort_unless(($details['event'] ?? null) === 'low_stock_threshold_reached', 404);
+
+        $branchId = filter_var($details['branch_id'] ?? null, FILTER_VALIDATE_INT);
+        $tankId = filter_var($details['tank_id'] ?? null, FILTER_VALIDATE_INT);
+        abort_unless(is_int($branchId) && is_int($tankId), 404);
+
+        $branch = Branch::query()
+            ->whereKey($branchId)
+            ->where('is_active', true)
+            ->firstOrFail();
+        abort_unless($request->user()->canAccessBranch($branch), 404);
+
+        $tank = FuelTank::query()
+            ->whereKey($tankId)
+            ->where('branch_id', $branch->id)
+            ->firstOrFail();
+
+        if ($request->user()->isOwner() && $request->user()->branch_id === null) {
+            $request->session()->put('active_branch_id', $branch->id);
+        }
+
+        return redirect()->route('inventory.index', ['highlight_tank' => $tank->id]);
     }
 }

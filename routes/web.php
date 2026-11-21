@@ -53,6 +53,8 @@ Route::middleware(['auth', 'active'])->group(function (): void {
         ->name('api.notifications.read-all');
     Route::patch('/api/notifications/{notification}/read', [NotificationController::class, 'markRead'])
         ->name('api.notifications.read');
+    Route::post('/notifications/{notification}/inventory', [NotificationController::class, 'viewInventory'])
+        ->name('notifications.inventory');
     Route::get('/sales', [FuelOperationController::class, 'sales'])
         ->middleware('role:owner,staff')
         ->name('sales.index');
