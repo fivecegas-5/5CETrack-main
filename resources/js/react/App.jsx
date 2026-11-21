@@ -1047,7 +1047,12 @@ function App({ root }) {
                                                             <p className="mt-1 text-xs text-slate-600">{description}</p>
                                                             {detailLine && <p className="mt-1 text-xs font-semibold text-rose-700">{detailLine}</p>}
                                                             <div className="mt-2 flex items-center justify-between gap-3">
-                                                                <a className="text-xs font-bold text-blue-700 hover:underline" href="/inventory" onClick={() => setNotificationsOpen(false)}>View inventory</a>
+                                                                {lowStock
+                                                                    ? <form action={`/notifications/${encodeURIComponent(item.id)}/inventory`} className="inline" method="POST">
+                                                                        <input name="_token" type="hidden" value={document.querySelector('meta[name="csrf-token"]')?.content ?? ''} />
+                                                                        <button className="text-xs font-bold text-blue-700 hover:underline" type="submit">View inventory</button>
+                                                                    </form>
+                                                                    : <a className="text-xs font-bold text-blue-700 hover:underline" href="/inventory" onClick={() => setNotificationsOpen(false)}>View inventory</a>}
                                                                 <span className="text-[10px] text-slate-400">{timestamp}</span>
                                                             </div>
                                                             {!item.read_at && <button className="mt-2 text-xs font-semibold text-slate-500 hover:text-slate-800 disabled:opacity-50" disabled={notificationActionBusy} onClick={() => markNotificationRead(item)} type="button">Mark as read</button>}
