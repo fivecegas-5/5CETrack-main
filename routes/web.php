@@ -127,10 +127,13 @@ Route::middleware(['auth', 'active'])->group(function (): void {
         Route::post('/api/shifts', [ShiftController::class, 'open'])->name('api.shifts.open');
         Route::post('/api/shifts/{shift}/close', [ShiftController::class, 'close'])->name('api.shifts.close');
         Route::get('/api/reports/summary', [ReportController::class, 'summary'])->name('api.reports.summary');
+        Route::get('/api/reports/sales/months', [ReportController::class, 'salesMonths'])
+            ->name('api.reports.sales.months');
         Route::get('/api/reports/sales', [ReportController::class, 'sales'])->name('api.reports.sales');
         Route::get('/api/reports/inventory-movements', [ReportController::class, 'inventoryMovements'])
             ->name('api.reports.inventory-movements');
         Route::get('/api/reports/sales.csv', [ReportController::class, 'salesCsv'])->name('api.reports.sales.csv');
+        Route::get('/api/reports/sales.xlsx', [ReportController::class, 'salesXlsx'])->name('api.reports.sales.xlsx');
         Route::get('/api/reports/sales/monthly.csv', [ReportController::class, 'monthlySalesCsv'])
             ->name('api.reports.sales.monthly');
         Route::get('/api/reports/audit-logs', [ReportController::class, 'auditLogs'])
@@ -175,4 +178,7 @@ Route::middleware(['auth', 'active'])->group(function (): void {
     Route::patch('/setup/products/{product}/status', [SetupController::class, 'updateProductStatus'])
         ->middleware('role:owner')
         ->name('setup.products.status');
+    Route::delete('/setup/products/{product}', [SetupController::class, 'destroyProduct'])
+        ->middleware('role:owner')
+        ->name('setup.products.destroy');
 });

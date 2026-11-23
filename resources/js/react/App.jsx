@@ -471,8 +471,9 @@ function SetupActionIcon({ kind }) {
     const paths = {
         edit: <path d="m15 5 4 4M4 20l4-.8L19 8a2.1 2.1 0 0 0-3-3L5 16l-1 4Z" />,
         save: <path d="m5 12 4 4L19 6" />,
-        archive: <><path d="M3 7h18M5 7l1 14h12l1-14" /><path d="M9 7V4h6v3m-5 4v6m4-6v6" /></>,
+        archive: <><path d="M3 5h18v5H3zM5 10v10h14V10M9 14h6" /><path d="m10 3 2-1 2 1" /></>,
         activate: <><path d="M12 5v14M5 12h14" /></>,
+        delete: <><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6" /><path d="M10 10v6m4-6v6" /></>,
     };
 
     return <svg aria-hidden="true" fill="none" height="20" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" style={{ display: 'block', flex: 'none', height: 20, width: 20 }} viewBox="0 0 24 24" width="20">{paths[kind]}</svg>;
@@ -482,20 +483,32 @@ function SetupIconButton({ kind, label, className = '', ...props }) {
     const colors = {
         edit: 'border-violet-300 bg-white text-violet-700 hover:bg-violet-50',
         save: 'border-emerald-700 bg-gradient-to-r from-emerald-600 to-emerald-800 text-white hover:from-emerald-700 hover:to-emerald-900',
-        archive: 'border-rose-800 bg-gradient-to-r from-rose-600 to-rose-900 text-white hover:from-rose-700 hover:to-rose-950',
+        archive: 'border-transparent bg-transparent text-amber-700 hover:border-amber-200 hover:bg-amber-50',
         activate: 'border-emerald-700 bg-gradient-to-r from-emerald-600 to-emerald-800 text-white hover:from-emerald-700 hover:to-emerald-900',
     };
 
     return <button aria-label={label} className={`grid size-10 shrink-0 place-items-center rounded-lg border transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-500 ${colors[kind]} ${className}`} title={label} type="button" {...props}><SetupActionIcon kind={kind} /></button>;
 }
 
+function SetupActionButton({ kind, label, className = '', type = 'button', ...props }) {
+    const colors = {
+        archive: 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100',
+        activate: 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100',
+        delete: 'border-rose-300 bg-rose-50 text-rose-800 hover:bg-rose-100',
+    };
+
+    return <button aria-label={label} className={`inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border px-3 text-sm font-bold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-500 ${colors[kind]} ${className}`} title={label} type={type} {...props}><SetupActionIcon kind={kind} /><span>{label}</span></button>;
+}
+
 function SetupPage({ data, activeBranchId, status, error }) {
     const [editingTankId, setEditingTankId] = useState(null);
+    const [deletingProductId, setDeletingProductId] = useState(null);
     const formatLiters = (value) => `${new Intl.NumberFormat('en-PH', { maximumFractionDigits: 3 }).format(value)} L`;
     const selectedBranchId = data.activeBranchId || activeBranchId;
     const activeBranch = data.branches.find((branch) => String(branch.id) === String(selectedBranchId));
     const activeProducts = data.products.filter((product) => product.isActive);
     const editingTank = data.tanks.find((tank) => tank.id === editingTankId);
+    const deletingProduct = data.products.find((product) => product.id === deletingProductId);
 
     return (
         <>
@@ -635,25 +648,39 @@ function SetupPage({ data, activeBranchId, status, error }) {
                 </ServerForm>
             </SetupEditModal>}
             <div className="mt-5">
-                <Panel title="Fuel products" subtitle="Products with historical use are archived, not removed.">
+                <Panel title="Fuel products" subtitle="Archive products to keep their history. Only products with no linked records can be deleted.">
                     <ServerForm action="/setup/products" className="grid gap-3 p-5 sm:grid-cols-[1fr_auto]">
                         <Field label="New fuel product"><Input name="name" placeholder="Fuel product name" required /></Field>
                         <div className="flex items-end"><Button type="submit">Add fuel</Button></div>
                     </ServerForm>
                     <div className="grid gap-3 border-t border-slate-100 p-5">
-                        {data.products.map((product) => <div className="flex flex-wrap items-center justify-between gap-3" key={product.id}>
+                        {data.products.map((product) => <div className="flex flex-wrap items-end justify-between gap-3" key={product.id}>
                             <ServerForm action={`/setup/products/${product.id}`} className="flex min-w-0 flex-1 items-end gap-2" method="PUT">
                                 <Field label={product.isActive ? product.name : `${product.name} · archived`}><Input defaultValue={product.name} name="name" required /></Field>
                                 <SetupIconButton className="mb-0.5" kind="save" label={`Save ${product.name}`} type="submit" />
                             </ServerForm>
-                            <ServerForm action={`/setup/products/${product.id}/status`} method="PATCH">
-                                <input name="is_active" type="hidden" value={product.isActive ? '0' : '1'} />
-                                <SetupIconButton kind={product.isActive ? 'archive' : 'activate'} label={product.isActive ? `Archive ${product.name}` : `Reactivate ${product.name}`} type="submit" />
-                            </ServerForm>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <ServerForm action={`/setup/products/${product.id}/status`} method="PATCH">
+                                    <input name="is_active" type="hidden" value={product.isActive ? '0' : '1'} />
+                                    <SetupActionButton kind={product.isActive ? 'archive' : 'activate'} label={product.isActive ? 'Archive' : 'Restore'} type="submit" />
+                                </ServerForm>
+                                <SetupActionButton kind="delete" label="Delete" onClick={() => setDeletingProductId(product.id)} />
+                            </div>
                         </div>)}
                     </div>
                 </Panel>
             </div>
+            {deletingProduct && <SetupEditModal onClose={() => setDeletingProductId(null)} title={`Delete ${deletingProduct.name}?`}>
+                <div className="grid gap-5">
+                    <p className="text-sm leading-6 text-slate-600">This permanently removes the fuel type. Products linked to tanks, prices, sales, or credit agreements cannot be deleted; archive those products to preserve history.</p>
+                    <div className="flex flex-wrap justify-end gap-2">
+                        <button className="min-h-10 rounded-lg border border-slate-200 px-4 text-sm font-bold text-slate-700 hover:bg-slate-50" onClick={() => setDeletingProductId(null)} type="button">Cancel</button>
+                        <ServerForm action={`/setup/products/${deletingProduct.id}`} method="DELETE">
+                            <SetupActionButton kind="delete" label="Delete fuel product" type="submit" />
+                        </ServerForm>
+                    </div>
+                </div>
+            </SetupEditModal>}
         </>
     );
 }

@@ -1001,18 +1001,45 @@ function Reports({ data, root }) {
     const chartContainerRef = useRef(null);
     const formatDate = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     const today = new Date();
-    const initialTo = formatDate(today);
-    const initialFromDate = new Date(today);
-    initialFromDate.setDate(initialFromDate.getDate() - 6);
+    const initialMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+    const initialMonthLabel = new Intl.DateTimeFormat('en-PH', { month: 'long', year: 'numeric' }).format(today);
     const [reportType, setReportType] = useState('liters');
     const [fuelProductId, setFuelProductId] = useState('all');
-    const [fromInput, setFromInput] = useState(() => formatDate(initialFromDate));
-    const [toInput, setToInput] = useState(() => initialTo);
-    const [fromDate, setFromDate] = useState(() => formatDate(initialFromDate));
-    const [toDate, setToDate] = useState(() => initialTo);
+    const [selectedMonth, setSelectedMonth] = useState(initialMonth);
+    const [monthOptions, setMonthOptions] = useState([{ value: initialMonth, label: initialMonthLabel }]);
+    const [monthsError, setMonthsError] = useState('');
     const [report, setReport] = useState(null);
     const [error, setError] = useState('');
     const [hoveredPoint, setHoveredPoint] = useState(null);
+    const [exportMenuOpen, setExportMenuOpen] = useState(false);
+    const exportMenuRef = useRef(null);
+
+    const [fromDate, toDate] = useMemo(() => {
+        const [year, month] = selectedMonth.split('-').map(Number);
+        const lastDay = new Date(year, month, 0).getDate();
+        return [`${selectedMonth}-01`, `${selectedMonth}-${String(lastDay).padStart(2, '0')}`];
+    }, [selectedMonth]);
+
+    useEffect(() => {
+        let cancelled = false;
+        const query = new URLSearchParams({ branch_id: root.dataset.activeBranchId });
+        requestJson(`${root.dataset.reportsMonthsUrl}?${query}`)
+            .then((response) => {
+                if (cancelled) return;
+                const availableMonths = response.data?.length
+                    ? response.data
+                    : [{ value: initialMonth, label: initialMonthLabel }];
+                setMonthOptions(availableMonths);
+                setSelectedMonth((current) => availableMonths.some((month) => month.value === current)
+                    ? current
+                    : availableMonths[0].value);
+                setMonthsError('');
+            })
+            .catch((requestError) => {
+                if (!cancelled) setMonthsError(requestError.message);
+            });
+        return () => { cancelled = true; };
+    }, [initialMonth, initialMonthLabel, root]);
 
     useEffect(() => {
         let cancelled = false;
@@ -1033,6 +1060,24 @@ function Reports({ data, root }) {
             });
         return () => { cancelled = true; };
     }, [fromDate, root, toDate]);
+
+    useEffect(() => {
+        if (!exportMenuOpen) return undefined;
+
+        const closeOnOutsideClick = (event) => {
+            if (!exportMenuRef.current?.contains(event.target)) setExportMenuOpen(false);
+        };
+        const closeOnEscape = (event) => {
+            if (event.key === 'Escape') setExportMenuOpen(false);
+        };
+
+        document.addEventListener('pointerdown', closeOnOutsideClick);
+        document.addEventListener('keydown', closeOnEscape);
+        return () => {
+            document.removeEventListener('pointerdown', closeOnOutsideClick);
+            document.removeEventListener('keydown', closeOnEscape);
+        };
+    }, [exportMenuOpen]);
 
     const sales = report?.sales;
     const isOwner = root.dataset.isOwner === 'true';
@@ -1055,12 +1100,15 @@ function Reports({ data, root }) {
     const dailyFuelSales = report?.sales_by_day_and_fuel ?? [];
     const productTotals = report?.sales_by_fuel ?? [];
     const chartColors = ['#22c55e', '#ef4444', '#fbbf24', '#3b82f6', '#a855f7', '#f97316'];
-    const chartSeries = selectedProducts.map((product, index) => {
+    const chartSeries = selectedProducts.map((product) => {
         const points = days.map((day) => {
             const entry = dailyFuelSales.find((item) => item.date === day && String(item.fuel_product_id) === String(product.id));
             return { date: day, entry, value: entry?.[reportType] ?? 0 };
         });
-        return { ...product, color: chartColors[index % chartColors.length], points, values: points.map((point) => point.value) };
+        const canonicalIndex = fuelOrder(product.name);
+        const stableIndex = data.products.findIndex((item) => item.id === product.id);
+        const colorIndex = canonicalIndex < 3 ? canonicalIndex : stableIndex % chartColors.length;
+        return { ...product, color: chartColors[colorIndex], points, values: points.map((point) => point.value) };
     });
     const chartMaximum = Math.max(0, ...chartSeries.flatMap((series) => series.values));
     const chartStep = chartMaximum > 0 ? Math.pow(10, Math.floor(Math.log10(chartMaximum)) - 1) : 1;
@@ -1077,34 +1125,48 @@ function Reports({ data, root }) {
     const dateLabel = (day) => new Intl.DateTimeFormat('en-PH', { month: 'short', day: 'numeric' }).format(new Date(`${day}T12:00:00`));
     const metricLabel = reportType === 'liters' ? 'Liters sold' : 'Sales revenue';
     const reportLiters = (value) => `${Number(value ?? 0).toLocaleString('en-PH', { maximumFractionDigits: 3 })} ${Number(value) === 1 ? 'Liter' : 'Liters'}`;
-    const invalidRange = !fromInput || !toInput || fromInput > toInput || fromInput > initialTo || toInput > initialTo || (new Date(`${toInput}T12:00:00`) - new Date(`${fromInput}T12:00:00`)) / 86400000 > 366;
-    const generateReport = (event) => {
-        event.preventDefault();
-        if (invalidRange) return;
-        setFromDate(fromInput);
-        setToDate(toInput);
-
-        const exportUrl = new URL(root.dataset.reportsSalesCsvUrl, window.location.origin);
-        exportUrl.searchParams.set('from', fromInput);
-        exportUrl.searchParams.set('to', toInput);
+    const downloadReport = (format) => {
+        const exportUrl = new URL(
+            format === 'xlsx' ? root.dataset.reportsSalesXlsxUrl : root.dataset.reportsSalesCsvUrl,
+            window.location.origin,
+        );
+        exportUrl.searchParams.set('from', fromDate);
+        exportUrl.searchParams.set('to', toDate);
         exportUrl.searchParams.set('branch_id', root.dataset.activeBranchId);
         if (fuelProductId !== 'all') exportUrl.searchParams.set('fuel_product_id', fuelProductId);
         window.location.assign(exportUrl.toString());
+    };
+    const generateReport = (event) => {
+        event.preventDefault();
+        downloadReport('xlsx');
     };
 
     return (
         <>
             <div className="mb-6"><p className="text-[11px] font-extrabold uppercase tracking-widest text-rose-700">Operations report</p><h1 className="text-3xl font-extrabold text-slate-900">Sales Reports</h1><p className="mt-1 text-sm text-slate-500">Generate and view fuel sales reports for the selected branch.</p></div>
-            <form aria-label="Sales report filters" className="report-filters mb-5 grid items-end gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_1fr_auto]" onSubmit={generateReport}>
+            <form aria-label="Sales report filters" className="report-filters mb-5 grid items-end gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_auto]" onSubmit={generateReport}>
                 <Field label="Report type"><Select onChange={(event) => setReportType(event.target.value)} value={reportType}><option value="liters">Sales volume (liters)</option><option value="revenue">Sales revenue (₱)</option></Select></Field>
                 <Field label="Fuel type"><Select onChange={(event) => setFuelProductId(event.target.value)} value={fuelProductId}><option value="all">All fuel types</option>{fuelProducts.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</Select></Field>
-                <Field label="Start date"><Input max={toInput || initialTo} onChange={(event) => setFromInput(event.target.value)} type="date" value={fromInput} /></Field>
-                <Field label="End date"><Input max={initialTo} min={fromInput} onChange={(event) => setToInput(event.target.value)} type="date" value={toInput} /></Field>
-                <ActionButton aria-label="Generate report and download CSV" className="min-h-10 md:col-span-2 xl:col-span-1" disabled={invalidRange} type="submit">
-                    <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v4h14v-4" /></svg>
-                    Generate report
-                </ActionButton>
+                <Field label="Sales month"><Select onChange={(event) => setSelectedMonth(event.target.value)} value={selectedMonth}>{monthOptions.map((month) => <option key={month.value} value={month.value}>{month.label}</option>)}</Select></Field>
+                <div className="relative flex min-h-10 md:col-span-2 xl:col-span-1" ref={exportMenuRef}>
+                    <ActionButton aria-label="Generate monthly report and download formatted Excel workbook" className="min-h-10 flex-1 !rounded-r-none" type="submit">
+                        <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v4h14v-4" /></svg>
+                        Generate report
+                    </ActionButton>
+                    <button aria-expanded={exportMenuOpen} aria-haspopup="menu" aria-label="Choose report download format" className="grid min-h-10 w-10 shrink-0 place-items-center rounded-r-xl border-l border-white/30 bg-rose-900 text-white transition hover:bg-rose-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-800" onClick={() => setExportMenuOpen((open) => !open)} type="button">
+                        <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5" /></svg>
+                    </button>
+                    {exportMenuOpen && <div className="absolute right-0 top-full z-30 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl" role="menu">
+                        <button className="w-full rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50" onClick={() => { setExportMenuOpen(false); downloadReport('csv'); }} role="menuitem" type="button">
+                            Editable CSV <span className="block text-xs font-normal text-slate-500">Keeps the editable CSV download</span>
+                        </button>
+                        <button className="w-full rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50" onClick={() => { setExportMenuOpen(false); downloadReport('xlsx'); }} role="menuitem" type="button">
+                            Editable Excel workbook <span className="block text-xs font-normal text-slate-500">Centered text and roomier columns</span>
+                        </button>
+                    </div>}
+                </div>
             </form>
+            {monthsError && <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800" role="status">Could not load sales months: {monthsError}</div>}
             {error && <div className="mb-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800" role="alert">Could not load sales statistics: {error}</div>}
             <div className="report-layout grid min-w-0 items-start gap-4">
                 <Panel title="Sales Summary" subtitle={`${dateLabel(fromDate)} – ${dateLabel(toDate)} · ${metricLabel.toLowerCase()}`}>
