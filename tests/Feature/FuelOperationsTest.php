@@ -493,7 +493,11 @@ class FuelOperationsTest extends TestCase
         $this->actingAs($manager)->get('/adjustments')->assertOk()->assertSee('data-page="adjustments"', false);
         $this->actingAs($manager)->get('/inventory')->assertOk()->assertSee('data-page="inventory"', false);
         $this->actingAs($manager)->get('/transactions')->assertOk()->assertSee('data-page="transactions"', false);
-        $this->actingAs($manager)->get('/reports')->assertOk()->assertSee('data-page="reports"', false);
+        $this->actingAs($manager)->get('/reports')->assertOk()
+            ->assertSee('data-page="reports"', false)
+            ->assertSee('data-reports-months-url="'.route('api.reports.sales.months').'"', false)
+            ->assertSee('data-reports-sales-csv-url="'.route('api.reports.sales.csv').'"', false)
+            ->assertSee('data-reports-sales-xlsx-url="'.route('api.reports.sales.xlsx').'"', false);
         $this->actingAs($manager)->get('/')->assertOk()
             ->assertSee('data-page="dashboard"', false);
     }
@@ -1200,6 +1204,23 @@ class FuelOperationsTest extends TestCase
             'branch_id' => $sanFabian->id,
         ]))->assertNotFound();
 
+        $previousMonth = now()->subMonthNoOverflow();
+        FuelSale::create([
+            'branch_id' => $branch->id,
+            'fuel_nozzle_id' => $nozzle->id,
+            'fuel_product_id' => $product->id,
+            'receipt_number' => 'PREVIOUS-MONTH-001',
+            'liters' => 2,
+            'price_per_liter' => 80,
+            'total_amount' => 160,
+            'sold_at' => $previousMonth,
+            'recorded_by' => $manager->id,
+        ]);
+        $this->actingAs($manager)->getJson(route('api.reports.sales.months', ['branch_id' => $branch->id]))
+            ->assertOk()
+            ->assertJsonPath('data.0.value', now()->format('Y-m'))
+            ->assertJsonPath('data.1.value', $previousMonth->format('Y-m'));
+
         $otherProduct = FuelProduct::create(['name' => 'Export-only fuel']);
         FuelSale::create([
             'branch_id' => $branch->id,
@@ -1213,16 +1234,64 @@ class FuelOperationsTest extends TestCase
             'recorded_by' => $manager->id,
         ]);
 
+        foreach ([
+            ['MONTH-FIRST-001', now()->startOfMonth()],
+            ['MONTH-LAST-001', now()->endOfMonth()],
+        ] as [$receiptNumber, $soldAt]) {
+            FuelSale::create([
+                'branch_id' => $branch->id,
+                'fuel_nozzle_id' => $nozzle->id,
+                'fuel_product_id' => $product->id,
+                'receipt_number' => $receiptNumber,
+                'liters' => 1,
+                'price_per_liter' => 80,
+                'total_amount' => 80,
+                'sold_at' => $soldAt,
+                'recorded_by' => $manager->id,
+            ]);
+        }
+
+        $monthFrom = now()->startOfMonth()->toDateString();
+        $monthTo = now()->endOfMonth()->toDateString();
         $csvResponse = $this->actingAs($manager)->get(route('api.reports.sales.csv', [
-            'from' => now()->toDateString(),
-            'to' => now()->toDateString(),
+            'from' => $monthFrom,
+            'to' => $monthTo,
             'fuel_product_id' => $product->id,
         ]))->assertOk()
             ->assertHeader('content-type', 'text/csv; charset=UTF-8')
             ->assertStreamed();
         $csv = $csvResponse->streamedContent();
         $this->assertStringContainsString('SHIFT-001', $csv);
+        $this->assertStringContainsString('MONTH-FIRST-001', $csv);
+        $this->assertStringContainsString('MONTH-LAST-001', $csv);
+        $this->assertStringNotContainsString('PREVIOUS-MONTH-001', $csv);
         $this->assertStringNotContainsString('EXPORT-OTHER-FUEL', $csv);
+
+        $xlsxResponse = $this->actingAs($manager)->get(route('api.reports.sales.xlsx', [
+            'from' => $monthFrom,
+            'to' => $monthTo,
+            'fuel_product_id' => $product->id,
+        ]))->assertOk()
+            ->assertHeader('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            ->assertStreamed();
+        $xlsxPath = tempnam(sys_get_temp_dir(), 'fivece-report-test-');
+        $this->assertNotFalse($xlsxPath);
+        file_put_contents($xlsxPath, $xlsxResponse->streamedContent());
+        $xlsx = new \ZipArchive;
+        $this->assertTrue($xlsx->open($xlsxPath));
+        $worksheet = $xlsx->getFromName('xl/worksheets/sheet1.xml');
+        $styles = $xlsx->getFromName('xl/styles.xml');
+        $xlsx->close();
+        unlink($xlsxPath);
+        $this->assertNotFalse($worksheet);
+        $this->assertNotFalse($styles);
+        $this->assertStringContainsString('width="20"', $worksheet);
+        $this->assertStringContainsString('SHIFT-001', $worksheet);
+        $this->assertStringContainsString('MONTH-FIRST-001', $worksheet);
+        $this->assertStringContainsString('MONTH-LAST-001', $worksheet);
+        $this->assertStringNotContainsString('PREVIOUS-MONTH-001', $worksheet);
+        $this->assertStringContainsString('horizontal="center"', $styles);
+        $this->assertStringContainsString('vertical="center"', $styles);
     }
 
     public function test_inactive_accounts_cannot_sign_in_and_managers_can_deactivate_only_branch_staff(): void
@@ -1287,6 +1356,33 @@ class FuelOperationsTest extends TestCase
         $this->actingAs($owner)->patch(route('setup.products.status', $tankProduct), ['is_active' => false])
             ->assertSessionHasErrors('product');
         $this->assertTrue($tankProduct->fresh()->is_active);
+    }
+
+    public function test_owner_can_delete_unused_fuel_products_but_not_products_with_history(): void
+    {
+        $branch = Branch::create(['code' => 'manaoag', 'name' => 'Manaoag']);
+        $owner = User::factory()->create(['role' => UserRole::Owner, 'branch_id' => $branch->id]);
+        $unusedProduct = FuelProduct::create(['name' => 'Unused test fuel']);
+        $usedProduct = FuelProduct::create(['name' => 'Tank-linked test fuel']);
+        FuelTank::create([
+            'branch_id' => $branch->id,
+            'fuel_product_id' => $usedProduct->id,
+            'code' => 'T-DELETE-GUARD',
+            'capacity_liters' => 5000,
+        ]);
+
+        $this->actingAs($owner)->delete(route('setup.products.destroy', $unusedProduct))
+            ->assertRedirect();
+        $this->assertDatabaseMissing('fuel_products', ['id' => $unusedProduct->id]);
+        $this->assertDatabaseHas('audit_logs', [
+            'action' => 'fuel-product.deleted',
+            'subject_type' => FuelProduct::class,
+            'subject_id' => $unusedProduct->id,
+        ]);
+
+        $this->actingAs($owner)->delete(route('setup.products.destroy', $usedProduct))
+            ->assertSessionHasErrors('product');
+        $this->assertDatabaseHas('fuel_products', ['id' => $usedProduct->id]);
     }
 
     public function test_manager_can_reject_delivery_and_adjustment_without_moving_stock(): void

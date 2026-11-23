@@ -13,6 +13,11 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
+use OpenSpout\Common\Entity\Row;
+use OpenSpout\Common\Entity\Style\CellAlignment;
+use OpenSpout\Common\Entity\Style\CellVerticalAlignment;
+use OpenSpout\Common\Entity\Style\Style;
+use OpenSpout\Writer\XLSX\Writer;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ReportController extends Controller
@@ -194,14 +199,7 @@ class ReportController extends Controller
 
     public function salesCsv(Request $request): StreamedResponse
     {
-        [$branchId, $from, $to] = $this->filters($request);
-        $fuelProductId = $request->validate([
-            'fuel_product_id' => ['nullable', 'integer', 'exists:fuel_products,id'],
-        ])['fuel_product_id'] ?? null;
-        $sales = $this->salesQuery($request, $branchId, $from, $to)
-            ->when($fuelProductId !== null, fn (Builder $query) => $query->where('fuel_product_id', $fuelProductId))
-            ->with(['branch', 'fuelProduct', 'nozzle', 'recorder'])
-            ->orderBy('sold_at');
+        [$sales, $from, $to] = $this->salesExportQuery($request);
         $filename = 'fivecetrack-sales-'.$from->toDateString().'-'.$to->toDateString().'.csv';
 
         return response()->streamDownload(function () use ($sales): void {
@@ -224,6 +222,103 @@ class ReportController extends Controller
 
             fclose($output);
         }, $filename, ['Content-Type' => 'text/csv; charset=UTF-8']);
+    }
+
+    public function salesMonths(Request $request)
+    {
+        [$branchId] = $this->filters($request);
+        $range = FuelSale::query()
+            ->where('status', 'completed')
+            ->when($branchId !== null, fn (Builder $query) => $query->where('branch_id', $branchId))
+            ->selectRaw('MIN(sold_at) as first_sale, MAX(sold_at) as last_sale')
+            ->first();
+
+        $firstMonth = $range?->first_sale
+            ? Carbon::parse($range->first_sale)->startOfMonth()
+            : now()->startOfMonth();
+        $lastMonth = $range?->last_sale
+            ? Carbon::parse($range->last_sale)->startOfMonth()
+            : $firstMonth->copy();
+        $months = [];
+        for ($month = $lastMonth->copy(); $month->gte($firstMonth); $month->subMonth()) {
+            $months[] = [
+                'value' => $month->format('Y-m'),
+                'label' => $month->format('F Y'),
+            ];
+        }
+
+        return response()->json(['data' => $months]);
+    }
+
+    public function salesXlsx(Request $request): StreamedResponse
+    {
+        [$sales, $from, $to] = $this->salesExportQuery($request);
+        $filename = 'fivecetrack-sales-'.$from->toDateString().'-'.$to->toDateString().'.xlsx';
+
+        return response()->streamDownload(function () use ($sales): void {
+            $temporaryPath = tempnam(sys_get_temp_dir(), 'fivece-sales-');
+            if ($temporaryPath === false) {
+                throw new \RuntimeException('Unable to prepare the sales spreadsheet.');
+            }
+
+            try {
+                $writer = new Writer;
+                $writer->openToFile($temporaryPath);
+                $sheet = $writer->getCurrentSheet();
+                $sheet->setName('Sales report');
+                foreach ([20, 22, 18, 18, 16, 12, 18, 18, 22] as $index => $width) {
+                    $sheet->setColumnWidth($width, $index + 1);
+                }
+
+                $headerStyle = (new Style)
+                    ->setFontBold()
+                    ->setFontColor('FFFFFF')
+                    ->setBackgroundColor('9B123A')
+                    ->setCellAlignment(CellAlignment::CENTER)
+                    ->setCellVerticalAlignment(CellVerticalAlignment::CENTER)
+                    ->setShouldWrapText();
+                $dataStyle = (new Style)
+                    ->setCellAlignment(CellAlignment::CENTER)
+                    ->setCellVerticalAlignment(CellVerticalAlignment::CENTER)
+                    ->setShouldWrapText();
+                $writer->addRow(Row::fromValues([
+                    'Branch',
+                    'Date',
+                    'Receipt',
+                    'Fuel',
+                    'Nozzle',
+                    'Liters',
+                    'Price per liter',
+                    'Sales amount',
+                    'Recorded by',
+                ], $headerStyle)->setHeight(28));
+
+                foreach ($sales->lazy(500) as $sale) {
+                    $writer->addRow(Row::fromValues([
+                        $sale->branch->name,
+                        $sale->sold_at->format('Y-m-d H:i:s'),
+                        $sale->receipt_number ?? '',
+                        $sale->fuelProduct->name,
+                        $sale->nozzle->code,
+                        (float) $sale->liters,
+                        (float) $sale->price_per_liter,
+                        (float) $sale->total_amount,
+                        $sale->recorder->name,
+                    ], $dataStyle)->setHeight(24));
+                }
+
+                $writer->close();
+                if (readfile($temporaryPath) === false) {
+                    throw new \RuntimeException('Unable to stream the sales spreadsheet.');
+                }
+            } finally {
+                if (is_file($temporaryPath)) {
+                    unlink($temporaryPath);
+                }
+            }
+        }, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ]);
     }
 
     public function monthlySalesCsv(Request $request): StreamedResponse
@@ -376,6 +471,20 @@ class ReportController extends Controller
             ->whereBetween('sold_at', [$from->copy()->startOfDay(), $to->copy()->endOfDay()])
             ->when($branchId !== null, fn (Builder $query) => $query->where('branch_id', $branchId))
             ->when($branchId === null && $request->user()->role !== UserRole::Owner, fn (Builder $query) => $query->whereRaw('1 = 0'));
+    }
+
+    private function salesExportQuery(Request $request): array
+    {
+        [$branchId, $from, $to] = $this->filters($request);
+        $fuelProductId = $request->validate([
+            'fuel_product_id' => ['nullable', 'integer', 'exists:fuel_products,id'],
+        ])['fuel_product_id'] ?? null;
+        $sales = $this->salesQuery($request, $branchId, $from, $to)
+            ->when($fuelProductId !== null, fn (Builder $query) => $query->where('fuel_product_id', $fuelProductId))
+            ->with(['branch', 'fuelProduct', 'nozzle', 'recorder'])
+            ->orderBy('sold_at');
+
+        return [$sales, $from, $to];
     }
 
     private function safeCsvText(?string $value): string

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Concerns\ResolvesBranchContext;
 use App\Models\AuditLog;
 use App\Models\Branch;
+use App\Models\FuelCreditAgreement;
 use App\Models\FuelNozzle;
 use App\Models\FuelPrice;
 use App\Models\FuelProduct;
@@ -17,8 +18,8 @@ use App\Models\User;
 use App\Services\InventoryLedger;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
@@ -37,27 +38,27 @@ class SetupController extends Controller
 
         $products = FuelProduct::orderBy('name')->get();
         $tanks = FuelTank::with('branch', 'fuelProduct')
-                ->whereIn('branch_id', $visibleBranchIds)
-                ->orderBy('branch_id')
-                ->orderBy('code')
-                ->get();
+            ->whereIn('branch_id', $visibleBranchIds)
+            ->orderBy('branch_id')
+            ->orderBy('code')
+            ->get();
         $stockByTank = InventoryMovement::query()
-                ->selectRaw('fuel_tank_id, SUM(signed_quantity_liters) as stock_liters')
-                ->whereIn('branch_id', $visibleBranchIds)
-                ->groupBy('fuel_tank_id')
-                ->pluck('stock_liters', 'fuel_tank_id');
+            ->selectRaw('fuel_tank_id, SUM(signed_quantity_liters) as stock_liters')
+            ->whereIn('branch_id', $visibleBranchIds)
+            ->groupBy('fuel_tank_id')
+            ->pluck('stock_liters', 'fuel_tank_id');
         $pumps = FuelPump::with('branch', 'nozzles.tank.fuelProduct')
-                ->whereIn('branch_id', $visibleBranchIds)
-                ->orderBy('branch_id')
-                ->orderBy('code')
-                ->get();
+            ->whereIn('branch_id', $visibleBranchIds)
+            ->orderBy('branch_id')
+            ->orderBy('code')
+            ->get();
         $prices = FuelPrice::with('branch', 'fuelProduct', 'setter')
-                ->whereIn('branch_id', $visibleBranchIds)
-                ->where('effective_from', '<=', now())
-                ->orderByDesc('effective_from')
-                ->get()
-                ->unique(fn (FuelPrice $price) => $price->branch_id.'-'.$price->fuel_product_id)
-                ->values();
+            ->whereIn('branch_id', $visibleBranchIds)
+            ->where('effective_from', '<=', now())
+            ->orderByDesc('effective_from')
+            ->get()
+            ->unique(fn (FuelPrice $price) => $price->branch_id.'-'.$price->fuel_product_id)
+            ->values();
         $pricesByBranchProduct = $prices->keyBy(
             fn (FuelPrice $price): string => $price->branch_id.'-'.$price->fuel_product_id,
         );
@@ -246,6 +247,28 @@ class SetupController extends Controller
         });
 
         return back()->with('success', 'Fuel type status updated. Historical transactions were retained.');
+    }
+
+    public function destroyProduct(Request $request, FuelProduct $product): RedirectResponse
+    {
+        DB::transaction(function () use ($request, $product): void {
+            $lockedProduct = FuelProduct::query()->whereKey($product->id)->lockForUpdate()->firstOrFail();
+            $hasHistory = $lockedProduct->fuelTanks()->exists()
+                || $lockedProduct->prices()->exists()
+                || $lockedProduct->sales()->exists()
+                || FuelCreditAgreement::query()->where('fuel_product_id', $lockedProduct->id)->exists();
+
+            if ($hasHistory) {
+                throw ValidationException::withMessages([
+                    'product' => 'This fuel product has linked station or transaction history. Archive it instead of deleting it.',
+                ]);
+            }
+
+            $this->audit($request, 'fuel-product.deleted', $lockedProduct, $lockedProduct->getAttributes(), null);
+            $lockedProduct->delete();
+        });
+
+        return back()->with('success', 'Fuel product permanently deleted.');
     }
 
     public function updateTankStatus(Request $request, FuelTank $tank): RedirectResponse
