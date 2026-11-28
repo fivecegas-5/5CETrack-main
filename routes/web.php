@@ -6,6 +6,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FuelCreditController;
 use App\Http\Controllers\FuelOperationController;
 use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\OwnerRecoveryController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\SalesImportController;
 use App\Http\Controllers\SetupController;
@@ -17,6 +18,13 @@ use Illuminate\Support\Facades\Route;
 Route::middleware('guest')->group(function (): void {
     Route::get('/login', [AuthController::class, 'create'])->name('login');
     Route::post('/login', [AuthController::class, 'store'])->middleware('throttle:5,1');
+    Route::get('/__owner-recovery/{token}', [OwnerRecoveryController::class, 'show'])
+        ->where('token', '[A-Za-z0-9_-]{32,128}')
+        ->name('owner-recovery.show');
+    Route::post('/__owner-recovery/{token}', [OwnerRecoveryController::class, 'store'])
+        ->where('token', '[A-Za-z0-9_-]{32,128}')
+        ->middleware('throttle:3,1')
+        ->name('owner-recovery.store');
     Route::get('/forgot-password', [AuthController::class, 'requestPasswordReset'])->name('password.request');
     Route::post('/forgot-password', [AuthController::class, 'sendPasswordResetLink'])
         ->middleware('throttle:5,1')
